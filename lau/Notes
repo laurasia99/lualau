@@ -1,0 +1,26 @@
+This directory contains modified source files
+ - intention is to keep original sources unmodified
+
+The changes have been made to
+ - remove dynamic loading of modules (package.loadlib)
+ - statically link additional modules; currently
+    - LuaFileSystem
+    - LuaSocket
+ - use linenoise instead of readline
+
+
+Technical observations
+----------------------
+
+The LuaSocket library includes .lua files as well as C code.
+This code is converted during the build process on Unix systems
+to create the file linit_src.ci. It consists of statically
+defined strings that are linked into the lua executable, and
+loaded on-demand using luaL_loadbuffer() [since the length of
+string is known in advance]. This is a standard wrapper around
+the lua_load() core function, which does the actual work.
+
+To support direct loading of embedded .lua files, a dummy
+module loader function is created for EACH file which just
+calls luaL_loadbuffer(). This is ugly but simple.
+

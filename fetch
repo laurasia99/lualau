@@ -1,0 +1,70 @@
+#!/bin/sh
+
+if [ ! -d lua-5.4.4 ] ; then
+  curl -L https://www.lua.org/ftp/lua-5.4.4.tar.gz | tar xzf -
+fi
+
+# Haven't reviewed changes between 3.0.0 and current 
+if [ ! -d luasocket-3.0.0 ] ; then
+  curl -L https://github.com/lunarmodules/luasocket/archive/refs/tags/v3.0.0.tar.gz | tar xzf -
+fi
+
+# Haven't reviewed changes between 1.8.0 and current
+#
+# Command to obtain latest git version:
+#    git clone https://github.com/keplerproject/luafilesystem
+if [ ! -d luafilesystem-1_8_0 ] ; then
+  curl -L https://github.com/keplerproject/luafilesystem/archive/refs/tags/v1_8_0.tar.gz | tar xzf -
+fi
+
+# Current version of linenoise adds additional functionality not used by lua.
+# Performed quick review of changes; no immediate reason to prefer working copy
+# against release 1.0 *** stick with 1.0
+#
+# Command to obtain latest git version:
+#    git clone https://github.com/antirez/linenoise
+if [ ! -d linenoise-1.0 ] ; then
+  curl -L https://github.com/antirez/linenoise/archive/refs/tags/1.0.tar.gz | tar xzf -
+fi
+
+# Minimise the footprint - remove redunant files
+
+clean () {
+  if [ -d $1 ] ; then echo "Removing $1" ; rm -rf $1 ; fi
+  if [ -f $1 ] ; then echo "Removing $1" ; rm -f $1 ; fi
+}
+
+LUA=lua-5.4.4
+LFS=luafilesystem-1_8_0
+LSO=luasocket-3.0.0
+
+# Remove original Makefiles (eliminate potential confusion)
+# and other build-like files
+clean linenoise-1.0/Makefile
+clean $LUA/Makefile
+clean $LUA/src/Makefile
+clean $LFS/Makefile
+clean $LFS/Makefile.win
+clean $LFS/appveyor.yml
+clean $LFS/config
+clean $LFS/config.win
+clean $LFS/luafilesystem-scm-1.rockspec
+clean $LFS/vc6
+clean $LSO/lua.props
+clean $LSO/linux.cmd
+clean $LSO/luasocket-scm-3.rockspec
+clean $LSO/luasocket.sln
+clean $LSO/macosx.cmd
+clean $LSO/makefile
+clean $LSO/makefile.dist
+clean $LSO/mime.vcxproj
+clean $LSO/mingw.cmd
+clean $LSO/rockspecs
+clean $LSO/socket.vcxproj
+clean $LSO/vc32.bat
+clean $LSO/vc64.bat
+clean $LSO/win32.cmd
+clean $LSO/win64.cmd
+clean $LSO/gem/makefile
+clean $LSO/src/makefile
+
