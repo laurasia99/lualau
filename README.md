@@ -1,11 +1,11 @@
 # lualau
 Custom Lua build (static; removing dynamic loading)
 
-The primary goal of this build is to create a minimal lua distribution that can run with a single binary.
+The primary goal of this build is to create a minimal [lua](https://www.lua.org/home.html) distribution that can run with a single binary.
 It includes the following libraries:
-- linenoise (adding command line history)
-- luafilesystem (supporting scripting)
-- luasockets (supporting networking)
+- [linenoise](https://github.com/antirez/linenoise) (adding command line history)
+- [luafilesystem](https://github.com/keplerproject/luafilesystem) (supporting scripting)
+- [luasockets](https://github.com/lunarmodules/luasocket) (supporting networking)
 
 This build *removes* package.loadlib(), and all dynamic library support, as supporting dynamic
 loading of binary modules is contrary to having a minimal lua distribution and a single binary.
