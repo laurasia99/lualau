@@ -15,10 +15,15 @@ The build process places intermediate object files into a separate directory (ob
 Hence, cleaning a build is as simple as 'rm -rf obj'.
 
 Modified source code is located in the lau/ subdirectory. Currently the only modifications
-have been to:
+have been to the following core lua-5.4.4 files:
 - linit.c (adding support for statically linking to luafilesystem and luasockets)
 - loadlib.c (removing dynamic library support)
 - lua.c (adding support for linenoise)
+
+The script `fetch` downloads the original sources, and does a tiny bit of scrubbing to remove
+build/distributions files from those packages. It runs on unix-like systems via `sh fetch`.
+The provided Makefile is relatively simple; `make` should suffice to build the `lua` binary
+(which is placed in the root directory, along with the `luac` binary).
 
 ***This build has not been extensively tested*** - use with caution.
 It has currently only been built within WSL (Windows Subsystem for Linux).
