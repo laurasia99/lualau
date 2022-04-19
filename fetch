@@ -17,6 +17,14 @@ if [ ! -d luafilesystem-1_8_0 ] ; then
   curl -L https://github.com/keplerproject/luafilesystem/archive/refs/tags/v1_8_0.tar.gz | tar xzf -
 fi
 
+# lua-zlib
+if [ ! -d lua-zlib-1.2 ] ; then
+  curl -L https://github.com/brimworks/lua-zlib/archive/refs/tags/v1.2.tar.gz | tar xzf -
+fi
+if [ ! -d zlib-1.2.12 ] ; then
+  curl -L https://www.zlib.net/zlib-1.2.12.tar.gz | tar xzf -
+fi
+
 # Current version of linenoise adds additional functionality not used by lua.
 # Performed quick review of changes; no immediate reason to prefer working copy
 # against release 1.0 *** stick with 1.0
@@ -37,6 +45,8 @@ clean () {
 LUA=lua-5.4.4
 LFS=luafilesystem-1_8_0
 LSO=luasocket-3.0.0
+LZL=lua-zlib-1.2
+ZLIB=zlib-1.2.12
 
 # Remove original Makefiles (eliminate potential confusion)
 # and other build-like files
@@ -67,4 +77,38 @@ clean $LSO/win32.cmd
 clean $LSO/win64.cmd
 clean $LSO/gem/makefile
 clean $LSO/src/makefile
+clean $LZL/CMakeLists.txt
+clean $LZL/Makefile
+clean $LZL/amnon_david.gz
+clean $LZL/cmake
+clean $LZL/lua-zlib-1.1-0.rockspec
+#clean $LZL/tap.lua
+#clean $LZL/test.lua
+clean $LZL/tom_macwright.gz
+clean $LZL/tom_macwright.out
+clean $LZL/zlib.def
+clean $ZLIB/CMakeLists.txt
+clean $ZLIB/Makefile
+clean $ZLIB/Makefile.in
+clean $ZLIB/amiga
+clean $ZLIB/configure
+clean $ZLIB/configure.log
+clean $ZLIB/contrib
+clean $ZLIB/examples
+clean $ZLIB/make_vms.com
+clean $ZLIB/msdos
+clean $ZLIB/nintendods
+clean $ZLIB/old
+clean $ZLIB/os400
+clean $ZLIB/qnx
+clean $ZLIB/test
+clean $ZLIB/treebuild.xml
+clean $ZLIB/watcom
+clean $ZLIB/win32
+clean $ZLIB/zconf.h.cmakein
+clean $ZLIB/zconf.h.in
+clean $ZLIB/zlib.pc
+clean $ZLIB/zlib.pc.cmakein
+clean $ZLIB/zlib.pc.in
+clean $ZLIB/zlib2ansi
 

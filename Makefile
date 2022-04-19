@@ -2,6 +2,7 @@
 #  - statically link additional modules
 #  -- luafilesystem
 #  -- luasockets
+#  -- lua-zlib
 #
 # This makefile builds objects into a separate directory, keeping the
 # source directories 'clean'
@@ -34,8 +35,6 @@ CFLAGS= -O2 -Wall -Wextra $(SYSCFLAGS)
 LDFLAGS= $(SYSLDFLAGS)
 LIBS= -lm $(SYSLIBS)
 
-AR= ar rcu
-RANLIB= ranlib
 RM= rm -f
 UNAME= uname
 
@@ -46,25 +45,32 @@ SYSLIBS=
 # Special flags for compiler modules (Lua core); -Os reduces code size.
 CMCFLAGS= 
 
+# Special flags for Zlib
+ZLIBFLAGS= -D_LARGEFILE64_SOURCE=1 -DHAVE_HIDDEN
+
 # Highlevel directories
 O= obj
+A= lau
 L= lua-5.4.4/src
 N= linenoise-1.0
 F= luafilesystem-1_8_0/src
 S= luasocket-3.0.0/src
-Z= lau
+Y= lua-zlib-1.2
+Z= zlib-1.2.12
 
 # == END OF USER SETTINGS -- NO NEED TO CHANGE ANYTHING BELOW THIS LINE =======
 
 PLATS= guess aix bsd c89 freebsd generic linux linux-readline line-linenoise macosx mingw posix solaris
 
-LUA_A=	$O/liblua.a
+#LUA_A=	$O/liblua.a
 CORE_O=	$O/lapi.o $O/lcode.o $O/lctype.o $O/ldebug.o $O/ldo.o $O/ldump.o $O/lfunc.o $O/lgc.o $O/llex.o $O/lmem.o $O/lobject.o $O/lopcodes.o $O/lparser.o $O/lstate.o $O/lstring.o $O/ltable.o $O/ltm.o $O/lundump.o $O/lvm.o $O/lzio.o $O/linenoise.o
 LIB_O=	$O/lauxlib.o $O/lbaselib.o $O/lcorolib.o $O/ldblib.o $O/liolib.o $O/lmathlib.o $O/loadlib.o $O/loslib.o $O/lstrlib.o $O/ltablib.o $O/lutf8lib.o $O/linit.o
 LFS_O=	$O/lfs.o
-SOCK_O=	$O/luasocket.o $O/timeout.o $O/buffer.o $O/io.o $O/auxiliar.o $O/compat.o $O/options.o $O/inet.o $O/usocket.o $O/except.o $O/select.o $O/tcp.o $O/udp.o $O/mime.o $O/unixstream.o $O/unixdgram.o $O/unix.o $O/serial.o
+SOCK_O=	$O/luasocket.o $O/timeout.o $O/buffer.o $O/io.o $O/auxiliar.o $O/compat.o $O/options.o $O/inet.o $O/usocket.o $O/except.o $O/select.o $O/tcp.o $O/udp.o $O/mime.o
 UNIXSOCK_O= $O/unixstream.o $O/unixdgram.o $O/unix.o $O/serial.o
-BASE_O= $(CORE_O) $(LIB_O) $(LFS_O) $(SOCK_O) $(UNIXSOCK_O)
+ZLIB_O=	$O/adler32.o $O/crc32.o $O/deflate.o $O/infback.o $O/inffast.o $O/inflate.o $O/inftrees.o $O/trees.o $O/zutil.o $O/compress.o $O/uncompr.o $O/gzclose.o $O/gzlib.o $O/gzread.o $O/gzwrite.o
+LUAZ_O=	$O/lua_zlib.o
+BASE_O= $(CORE_O) $(LIB_O) $(LFS_O) $(SOCK_O) $(UNIXSOCK_O) $(ZLIB_O) $(LUAZ_O)
 
 LUA_T=	lua
 LUA_O=	$O/lua.o
@@ -73,8 +79,7 @@ LUAC_T=	luac
 LUAC_O=	$O/luac.o
 
 ALL_O= $(BASE_O) $(LUA_O) $(LUAC_O)
-ALL_T= $(LUA_A) $(LUA_T) $(LUAC_T)
-ALL_A= $(LUA_A)
+ALL_T= $(LUA_T) $(LUAC_T)
 
 # Targets start here.
 default: objdir $(PLAT)
@@ -83,17 +88,11 @@ all:	$(ALL_T)
 
 o:	$(ALL_O)
 
-a:	$(ALL_A)
+$(LUA_T): $(LUA_O) $(BASE_O)
+	$(CC) -o $@ $(LDFLAGS) $(LUA_O) $(BASE_O) $(LIBS)
 
-$(LUA_A): $(BASE_O)
-	$(AR) $@ $(BASE_O)
-	$(RANLIB) $@
-
-$(LUA_T): $(LUA_O) $(LUA_A)
-	$(CC) -o $@ $(LDFLAGS) $(LUA_O) $(LUA_A) $(LIBS)
-
-$(LUAC_T): $(LUAC_O) $(LUA_A)
-	$(CC) -o $@ $(LDFLAGS) $(LUAC_O) $(LUA_A) $(LIBS)
+$(LUAC_T): $(LUAC_O) $(BASE_O)
+	$(CC) -o $@ $(LDFLAGS) $(LUAC_O) $(BASE_O) $(LIBS)
 
 test:
 	./$(LUA_T) -v
@@ -113,8 +112,6 @@ echo:
 	@echo "CFLAGS= $(CFLAGS)"
 	@echo "LDFLAGS= $(LDFLAGS)"
 	@echo "LIBS= $(LIBS)"
-	@echo "AR= $(AR)"
-	@echo "RANLIB= $(RANLIB)"
 	@echo "RM= $(RM)"
 	@echo "UNAME= $(UNAME)"
 
@@ -193,7 +190,7 @@ SunOS solaris:
 #  - define variables lau_<basename>=<lua module name>
 # This is ugly, but explicit.
 
-$Z/linit_src.ci: $S/ftp.lua $S/headers.lua $S/http.lua $S/ltn12.lua \
+$A/linit_src.ci: $S/ftp.lua $S/headers.lua $S/http.lua $S/ltn12.lua \
  $S/mbox.lua $S/mime.lua $S/smtp.lua $S/socket.lua $S/tp.lua $S/url.lua
 	( P="" ; echo "/* Automatically generated `date` */" ; \
 	lau_ftp=socket.ftp lau_http=socket.http lau_smtp=socket.smtp \
@@ -248,7 +245,7 @@ $O/lfunc.o: $L/lfunc.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/ldebug.h $L/lstate.
 $O/lgc.o: $L/lgc.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/ldebug.h $L/lstate.h $L/lobject.h \
  $L/llimits.h $L/ltm.h $L/lzio.h $L/lmem.h $L/ldo.h $L/lfunc.h $L/lgc.h $L/lstring.h $L/ltable.h
 	$(CC) $(CFLAGS) -c -o $@ $<
-$O/linit.o: $Z/linit.c $Z/linit_src.ci $L/lprefix.h $L/lua.h $L/luaconf.h $L/lualib.h $L/lauxlib.h
+$O/linit.o: $A/linit.c $A/linit_src.ci $L/lprefix.h $L/lua.h $L/luaconf.h $L/lualib.h $L/lauxlib.h
 	$(CC) $(CFLAGS) -I$L -I$F -I$S -c -o $@ $<
 $O/liolib.o: $L/liolib.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/lualib.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -261,7 +258,7 @@ $O/lmathlib.o: $L/lmathlib.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/
 $O/lmem.o: $L/lmem.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/ldebug.h $L/lstate.h $L/lobject.h \
  $L/llimits.h $L/ltm.h $L/lzio.h $L/lmem.h $L/ldo.h $L/lgc.h
 	$(CC) $(CFLAGS) -c -o $@ $<
-$O/loadlib.o: $Z/loadlib.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/lualib.h
+$O/loadlib.o: $A/loadlib.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/lualib.h
 	$(CC) $(CFLAGS) -I$L -c -o $@ $<
 $O/lobject.o: $L/lobject.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lctype.h $L/llimits.h \
  $L/ldebug.h $L/lstate.h $L/lobject.h $L/ltm.h $L/lzio.h $L/lmem.h $L/ldo.h $L/lstring.h $L/lgc.h \
@@ -292,7 +289,7 @@ $O/ltablib.o: $L/ltablib.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/lu
 $O/ltm.o: $L/ltm.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/ldebug.h $L/lstate.h $L/lobject.h \
  $L/llimits.h $L/ltm.h $L/lzio.h $L/lmem.h $L/ldo.h $L/lgc.h $L/lstring.h $L/ltable.h $L/lvm.h
 	$(CC) $(CFLAGS) -c -o $@ $<
-$O/lua.o: $Z/lua.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/lualib.h
+$O/lua.o: $A/lua.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/lualib.h
 	$(CC) $(CFLAGS) -I$L -I$N -c -o $@ $<
 $O/luac.o: $L/luac.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lauxlib.h $L/ldebug.h $L/lstate.h \
  $L/lobject.h $L/llimits.h $L/ltm.h $L/lzio.h $L/lmem.h $L/lopcodes.h $L/lopnames.h $L/lundump.h
@@ -360,6 +357,40 @@ $O/unix.o: $S/unix.c $S/auxiliar.h $S/socket.h $S/io.h $S/timeout.h $S/usocket.h
 $O/serial.o: $S/serial.c $S/auxiliar.h $S/socket.h $S/io.h $S/timeout.h $S/usocket.h \
   $S/options.h $S/unix.h $S/buffer.h
 	$(CC) $(CFLAGS) -I$L -I$S -c -o $@ $<
+
+$O/adler32.o: $Z/adler32.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/crc32.o: $Z/crc32.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/deflate.o: $Z/deflate.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/infback.o: $Z/infback.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/inffast.o: $Z/inffast.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/inflate.o: $Z/inflate.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/inftrees.o: $Z/inftrees.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/trees.o: $Z/trees.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/zutil.o: $Z/zutil.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/compress.o: $Z/compress.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/uncompr.o: $Z/uncompr.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/gzclose.o: $Z/gzclose.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/gzlib.o: $Z/gzlib.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/gzread.o: $Z/gzread.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+$O/gzwrite.o: $Z/gzwrite.c
+	$(CC) $(CFLAGS) $(ZLIBFLAGS) -c -o $@ $<
+
+$O/lua_zlib.o: $Y/lua_zlib.c
+	$(CC) $(CFLAGS) -I$L -I$Z -c -o $@ $<
 
 # (end of Makefile)
 
