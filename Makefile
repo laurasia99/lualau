@@ -63,7 +63,8 @@ CORE_O=	$O/lapi.o $O/lcode.o $O/lctype.o $O/ldebug.o $O/ldo.o $O/ldump.o $O/lfun
 LIB_O=	$O/lauxlib.o $O/lbaselib.o $O/lcorolib.o $O/ldblib.o $O/liolib.o $O/lmathlib.o $O/loadlib.o $O/loslib.o $O/lstrlib.o $O/ltablib.o $O/lutf8lib.o $O/linit.o
 LFS_O=	$O/lfs.o
 SOCK_O=	$O/luasocket.o $O/timeout.o $O/buffer.o $O/io.o $O/auxiliar.o $O/compat.o $O/options.o $O/inet.o $O/usocket.o $O/except.o $O/select.o $O/tcp.o $O/udp.o $O/mime.o $O/unixstream.o $O/unixdgram.o $O/unix.o $O/serial.o
-BASE_O= $(CORE_O) $(LIB_O) $(LFS_O) $(SOCK_O)
+UNIXSOCK_O= $O/unixstream.o $O/unixdgram.o $O/unix.o $O/serial.o
+BASE_O= $(CORE_O) $(LIB_O) $(LFS_O) $(SOCK_O) $(UNIXSOCK_O)
 
 LUA_T=	lua
 LUA_O=	$O/lua.o
@@ -182,19 +183,35 @@ SunOS solaris:
 
 # DO NOT DELETE
 
+# Statically linked Lua code (from core LuaLau libraries) is currently
+# embedded as raw strings. Each module has a name that is not necessarily
+# the same as the file. For example, there is an implicit directory search
+# when the module name contains a dot '.'. Since the embedding of the .lua
+# code strips away the directory structure normally set by installing a
+# library there must be another way of mapping file names to module names.
+# Cannot rely on the shell supporting associative arrays, so kludge it:
+#  - define variables lau_<basename>=<lua module name>
+# This is ugly, but explicit.
+
 $Z/linit_src.ci: $S/ftp.lua $S/headers.lua $S/http.lua $S/ltn12.lua \
  $S/mbox.lua $S/mime.lua $S/smtp.lua $S/socket.lua $S/tp.lua $S/url.lua
-	( V="" ; echo "/* Automatically generated `date` */" ; \
+	( P="" ; echo "/* Automatically generated `date` */" ; \
+	lau_ftp=socket.ftp lau_http=socket.http lau_smtp=socket.smtp \
+	lau_headers=socket.headers lau_tp=socket.tp lau_url=socket.url ; \
 	for i in $^ ; do { \
-	  echo "/* $$i */" ; v=`basename $$i .lua` ; V="$$V $$v" ; \
-	  echo static const char lau_$$v[] = \"\\ ; \
-	  (cat $$i ; echo "" ) | sed -e's/\\/\\\\/g' -e's/"/\\"/g' -e's/$$/\\/' - ; \
-	  echo \"\; ; echo "LUAMOD_API int luaopen_$$v (lua_State *L) {" ; \
-	  echo "  return luaL_loadbuffer(L,lau_$$v,sizeof(lau_$$v),\"$$v\"); }" ; \
+	  echo "/* $$i */" ; p=`basename $$i .lua` ; P="$$P $$p" ; m=$$p \
+	  eval m="\$$lau_$$p" ; [ -z $$m ] && eval m=$$p ; \
+	  echo static const char lau_$$p[] = \"\\ ; \
+	  (cat $$i ; echo "" ) | sed -e's/\\/\\\\/g' -e's/"/\\"/g' -e's/$$/\\n\\/' - ; \
+	  echo \"\; ; echo "LUAMOD_API int luaopen_$$p (lua_State *L) {" ; \
+	  echo "  return lau_loadlua(L,lau_$$p,sizeof(lau_$$p),\"$$m\"); }" ; \
 	  echo "" ; }; done ; \
-	echo "static struct luaL_Reg lau__strings[] = {" ; \
-	for i in $$V ; do echo " {\"$$i\",luaopen_$$i}," ; done ; \
-	echo " {NULL,NULL}};" ; ) > $@
+	echo "static struct luaL_Reg lau_luamodules[] = {" ; \
+	for p in $$P ; do { \
+	  eval m="\$$lau_$$p" ; [ -z $$m ] && eval m=$$p ; \
+	  echo " {\"$$m\",luaopen_$$p}," ; } ; done ; \
+	echo " {NULL,NULL}};" ; echo "" ; ) > $@
+
 
 $O/lapi.o: $L/lapi.c $L/lprefix.h $L/lua.h $L/luaconf.h $L/lapi.h $L/llimits.h $L/lstate.h \
  $L/lobject.h $L/ltm.h $L/lzio.h $L/lmem.h $L/ldebug.h $L/ldo.h $L/lfunc.h $L/lgc.h $L/lstring.h \

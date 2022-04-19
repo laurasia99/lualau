@@ -31,7 +31,7 @@ It has currently only been built within WSL (Windows Subsystem for Linux).
 ## What makes a 1.0 release?
 
 My goals are to use this build for 6-months (or at least until I'm comfortable with it),
-to identify if there is any core functionality missing, and that I can't live with.
+to identify if there is any core functionality missing, and that I can't live without.
 I might add libraries to support date and time operations and reading/writing CSV files
 - but no guarantee. My preference is to minimise both the number of external dependencies
 and the amount of C code.
