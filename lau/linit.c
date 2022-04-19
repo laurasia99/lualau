@@ -60,23 +60,77 @@ static const luaL_Reg loadedlibs[] = {
 #include "lfs.h"
 #include "luasocket.h"
 #include "mime.h"
+#include "unix.h"
+
+#ifdef LAU_SOCKET_SERIAL
+/* Missing prototype */
+LUASOCKET_API int luaopen_socket_serial(lua_State *L);
+#endif
 
 static const luaL_Reg linkedlibs[] = {
   {"lfs", luaopen_lfs},
   {"socket.core", luaopen_socket_core},
   {"mime.core", luaopen_mime_core},
+#ifdef LAU_SOCKET_SERIAL
+  /* Invocation socket.serial(<path>) -- factory function
+  ** Allows raw access to Unix serial devices
+  */
+  {"socket.serial", luaopen_socket_serial},
+#endif
+  {"socket.unix", luaopen_socket_unix},
   {NULL, NULL}
 };
 
-static void lualL_linked (lua_State *L, const char *modname, int (*luaopen_modname)(lua_State *)) {
+static void lau_addpreload (lua_State *L, const char *modname, int (*luaopen_modname)(lua_State *)) {
   luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE);
   lua_pushcfunction(L, luaopen_modname);
   lua_setfield(L, -2, modname);
   lua_pop(L, 1);  // remove PRELOAD table
 }
 
+#ifndef NO_PARANOIA
+#include <assert.h>
+#include <string.h>
+#endif
+
+static int lau_loadlua(lua_State *L, const char *b, size_t n, const char *m) {
+  int status;
+
+#ifndef NO_PARANOIA
+  assert(0==strcmp(luaL_checkstring(L,1),m));
+  assert(0==strcmp(luaL_checkstring(L,2),":preload:"));
+#endif
+
+  status = luaL_loadbuffer(L, b, n-1, m);		/* Load chunk */
+  if (status == LUA_OK) {
+    lua_rotate(L, 1, 1);				/* chunk name :preload: */
+
+#ifndef NO_PARANOIA
+    assert(0==strcmp(luaL_checkstring(L,2),m));
+    assert(0==strcmp(luaL_checkstring(L,3),":preload:"));
+    assert(lua_isfunction(L,1));
+#endif
+
+    /* Stack: chunk module-name :preload: */
+    lua_call(L, 2, 1);					/* execute chunk */
+
+#ifndef NO_PARANOIA
+    assert(lua_istable(L, -1));
+    assert(lua_gettop(L) == 1);
+#endif
+    return 1;
+  }
+
+  /* XXX else ??? how to raise an error? */
+  /* XXX fail silently? What does the caller of luaopen_XXX do? */
+  /* XXX -- look at loadlib:ll_require() -- return nil? */
+  return 0;
+}
+
+
 /* Import statically loaded .lua modules */
 #include "linit_src.ci"
+
 
 LUALIB_API void luaL_openlibs (lua_State *L) {
   const luaL_Reg *lib;
@@ -87,11 +141,11 @@ LUALIB_API void luaL_openlibs (lua_State *L) {
   }
   /* prelinked C modules */
   for (lib = linkedlibs; lib->func; lib++) {
-    lualL_linked(L, lib->name, lib->func);
+    lau_addpreload(L, lib->name, lib->func);
   }
   /* prelinked Lua modules */
-  for (lib = lau__strings; lib->func; lib++) {
-    lualL_linked(L, lib->name, lib->func);
+  for (lib = lau_luamodules; lib->func; lib++) {
+    lau_addpreload(L, lib->name, lib->func);
   }
 }
 

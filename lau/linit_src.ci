@@ -1,2300 +1,2300 @@
-/* Automatically generated Mon Apr 18 13:19:12 AEST 2022 */
+/* Automatically generated Tue Apr 19 13:10:37 AEST 2022 */
 /* luasocket-3.0.0/src/ftp.lua */
 static const char lau_ftp[] = "\
------------------------------------------------------------------------------\
--- FTP support for the Lua language\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module and import dependencies\
------------------------------------------------------------------------------\
-local base = _G\
-local table = require(\"table\")\
-local string = require(\"string\")\
-local math = require(\"math\")\
-local socket = require(\"socket\")\
-local url = require(\"socket.url\")\
-local tp = require(\"socket.tp\")\
-local ltn12 = require(\"ltn12\")\
-socket.ftp = {}\
-local _M = socket.ftp\
------------------------------------------------------------------------------\
--- Program constants\
------------------------------------------------------------------------------\
--- timeout in seconds before the program gives up on a connection\
-_M.TIMEOUT = 60\
--- default port for ftp service\
-local PORT = 21\
--- this is the default anonymous password. used when no password is\
--- provided in url. should be changed to your e-mail.\
-_M.USER = \"ftp\"\
-_M.PASSWORD = \"anonymous@anonymous.org\"\
-\
------------------------------------------------------------------------------\
--- Low level FTP API\
------------------------------------------------------------------------------\
-local metat = { __index = {} }\
-\
-function _M.open(server, port, create)\
-    local tp = socket.try(tp.connect(server, port or PORT, _M.TIMEOUT, create))\
-    local f = base.setmetatable({ tp = tp }, metat)\
-    -- make sure everything gets closed in an exception\
-    f.try = socket.newtry(function() f:close() end)\
-    return f\
-end\
-\
-function metat.__index:portconnect()\
-    self.try(self.server:settimeout(_M.TIMEOUT))\
-    self.data = self.try(self.server:accept())\
-    self.try(self.data:settimeout(_M.TIMEOUT))\
-end\
-\
-function metat.__index:pasvconnect()\
-    self.data = self.try(socket.tcp())\
-    self.try(self.data:settimeout(_M.TIMEOUT))\
-    self.try(self.data:connect(self.pasvt.address, self.pasvt.port))\
-end\
-\
-function metat.__index:login(user, password)\
-    self.try(self.tp:command(\"user\", user or _M.USER))\
-    local code, _ = self.try(self.tp:check{\"2..\", 331})\
-    if code == 331 then\
-        self.try(self.tp:command(\"pass\", password or _M.PASSWORD))\
-        self.try(self.tp:check(\"2..\"))\
-    end\
-    return 1\
-end\
-\
-function metat.__index:pasv()\
-    self.try(self.tp:command(\"pasv\"))\
-    local _, reply = self.try(self.tp:check(\"2..\"))\
-    local pattern = \"(%d+)%D(%d+)%D(%d+)%D(%d+)%D(%d+)%D(%d+)\"\
-    local a, b, c, d, p1, p2 = socket.skip(2, string.find(reply, pattern))\
-    self.try(a and b and c and d and p1 and p2, reply)\
-    self.pasvt = {\
-        address = string.format(\"%d.%d.%d.%d\", a, b, c, d),\
-        port = p1*256 + p2\
-    }\
-    if self.server then\
-        self.server:close()\
-        self.server = nil\
-    end\
-    return self.pasvt.address, self.pasvt.port\
-end\
-\
-function metat.__index:epsv()\
-    self.try(self.tp:command(\"epsv\"))\
-    local _, reply = self.try(self.tp:check(\"229\"))\
-    local pattern = \"%((.)(.-)%1(.-)%1(.-)%1%)\"\
-    local _, _, _, port = string.match(reply, pattern)\
-    self.try(port, \"invalid epsv response\")\
-    self.pasvt = {\
-        address = self.tp:getpeername(),\
-        port = port\
-    }\
-    if self.server then\
-        self.server:close()\
-        self.server = nil\
-    end\
-    return self.pasvt.address, self.pasvt.port\
-end\
-\
-\
-function metat.__index:port(address, port)\
-    self.pasvt = nil\
-    if not address then\
-        address = self.try(self.tp:getsockname())\
-        self.server = self.try(socket.bind(address, 0))\
-        address, port = self.try(self.server:getsockname())\
-        self.try(self.server:settimeout(_M.TIMEOUT))\
-    end\
-    local pl = math.mod(port, 256)\
-    local ph = (port - pl)/256\
-    local arg = string.gsub(string.format(\"%s,%d,%d\", address, ph, pl), \"%.\", \",\")\
-    self.try(self.tp:command(\"port\", arg))\
-    self.try(self.tp:check(\"2..\"))\
-    return 1\
-end\
-\
-function metat.__index:eprt(family, address, port)\
-    self.pasvt = nil\
-    if not address then\
-        address = self.try(self.tp:getsockname())\
-        self.server = self.try(socket.bind(address, 0))\
-        address, port = self.try(self.server:getsockname())\
-        self.try(self.server:settimeout(_M.TIMEOUT))\
-    end\
-    local arg = string.format(\"|%s|%s|%d|\", family, address, port)\
-    self.try(self.tp:command(\"eprt\", arg))\
-    self.try(self.tp:check(\"2..\"))\
-    return 1\
-end\
-\
-\
-function metat.__index:send(sendt)\
-    self.try(self.pasvt or self.server, \"need port or pasv first\")\
-    -- if there is a pasvt table, we already sent a PASV command\
-    -- we just get the data connection into self.data\
-    if self.pasvt then self:pasvconnect() end\
-    -- get the transfer argument and command\
-    local argument = sendt.argument or\
-        url.unescape(string.gsub(sendt.path or \"\", \"^[/\\\\]\", \"\"))\
-    if argument == \"\" then argument = nil end\
-    local command = sendt.command or \"stor\"\
-    -- send the transfer command and check the reply\
-    self.try(self.tp:command(command, argument))\
-    local code, _ = self.try(self.tp:check{\"2..\", \"1..\"})\
-    -- if there is not a pasvt table, then there is a server\
-    -- and we already sent a PORT command\
-    if not self.pasvt then self:portconnect() end\
-    -- get the sink, source and step for the transfer\
-    local step = sendt.step or ltn12.pump.step\
-    local readt = { self.tp }\
-    local checkstep = function(src, snk)\
-        -- check status in control connection while downloading\
-        local readyt = socket.select(readt, nil, 0)\
-        if readyt[tp] then code = self.try(self.tp:check(\"2..\")) end\
-        return step(src, snk)\
-    end\
-    local sink = socket.sink(\"close-when-done\", self.data)\
-    -- transfer all data and check error\
-    self.try(ltn12.pump.all(sendt.source, sink, checkstep))\
-    if string.find(code, \"1..\") then self.try(self.tp:check(\"2..\")) end\
-    -- done with data connection\
-    self.data:close()\
-    -- find out how many bytes were sent\
-    local sent = socket.skip(1, self.data:getstats())\
-    self.data = nil\
-    return sent\
-end\
-\
-function metat.__index:receive(recvt)\
-    self.try(self.pasvt or self.server, \"need port or pasv first\")\
-    if self.pasvt then self:pasvconnect() end\
-    local argument = recvt.argument or\
-        url.unescape(string.gsub(recvt.path or \"\", \"^[/\\\\]\", \"\"))\
-    if argument == \"\" then argument = nil end\
-    local command = recvt.command or \"retr\"\
-    self.try(self.tp:command(command, argument))\
-    local code,reply = self.try(self.tp:check{\"1..\", \"2..\"})\
-    if (code >= 200) and (code <= 299) then\
-        recvt.sink(reply)\
-        return 1\
-    end\
-    if not self.pasvt then self:portconnect() end\
-    local source = socket.source(\"until-closed\", self.data)\
-    local step = recvt.step or ltn12.pump.step\
-    self.try(ltn12.pump.all(source, recvt.sink, step))\
-    if string.find(code, \"1..\") then self.try(self.tp:check(\"2..\")) end\
-    self.data:close()\
-    self.data = nil\
-    return 1\
-end\
-\
-function metat.__index:cwd(dir)\
-    self.try(self.tp:command(\"cwd\", dir))\
-    self.try(self.tp:check(250))\
-    return 1\
-end\
-\
-function metat.__index:type(type)\
-    self.try(self.tp:command(\"type\", type))\
-    self.try(self.tp:check(200))\
-    return 1\
-end\
-\
-function metat.__index:greet()\
-    local code = self.try(self.tp:check{\"1..\", \"2..\"})\
-    if string.find(code, \"1..\") then self.try(self.tp:check(\"2..\")) end\
-    return 1\
-end\
-\
-function metat.__index:quit()\
-    self.try(self.tp:command(\"quit\"))\
-    self.try(self.tp:check(\"2..\"))\
-    return 1\
-end\
-\
-function metat.__index:close()\
-    if self.data then self.data:close() end\
-    if self.server then self.server:close() end\
-    return self.tp:close()\
-end\
-\
------------------------------------------------------------------------------\
--- High level FTP API\
------------------------------------------------------------------------------\
-local function override(t)\
-    if t.url then\
-        local u = url.parse(t.url)\
-        for i,v in base.pairs(t) do\
-            u[i] = v\
-        end\
-        return u\
-    else return t end\
-end\
-\
-local function tput(putt)\
-    putt = override(putt)\
-    socket.try(putt.host, \"missing hostname\")\
-    local f = _M.open(putt.host, putt.port, putt.create)\
-    f:greet()\
-    f:login(putt.user, putt.password)\
-    if putt.type then f:type(putt.type) end\
-    f:epsv()\
-    local sent = f:send(putt)\
-    f:quit()\
-    f:close()\
-    return sent\
-end\
-\
-local default = {\
-    path = \"/\",\
-    scheme = \"ftp\"\
-}\
-\
-local function genericform(u)\
-    local t = socket.try(url.parse(u, default))\
-    socket.try(t.scheme == \"ftp\", \"wrong scheme '\" .. t.scheme .. \"'\")\
-    socket.try(t.host, \"missing hostname\")\
-    local pat = \"^type=(.)$\"\
-    if t.params then\
-        t.type = socket.skip(2, string.find(t.params, pat))\
-        socket.try(t.type == \"a\" or t.type == \"i\",\
-            \"invalid type '\" .. t.type .. \"'\")\
-    end\
-    return t\
-end\
-\
-_M.genericform = genericform\
-\
-local function sput(u, body)\
-    local putt = genericform(u)\
-    putt.source = ltn12.source.string(body)\
-    return tput(putt)\
-end\
-\
-_M.put = socket.protect(function(putt, body)\
-    if base.type(putt) == \"string\" then return sput(putt, body)\
-    else return tput(putt) end\
-end)\
-\
-local function tget(gett)\
-    gett = override(gett)\
-    socket.try(gett.host, \"missing hostname\")\
-    local f = _M.open(gett.host, gett.port, gett.create)\
-    f:greet()\
-    f:login(gett.user, gett.password)\
-    if gett.type then f:type(gett.type) end\
-    f:epsv()\
-    f:receive(gett)\
-    f:quit()\
-    return f:close()\
-end\
-\
-local function sget(u)\
-    local gett = genericform(u)\
-    local t = {}\
-    gett.sink = ltn12.sink.table(t)\
-    tget(gett)\
-    return table.concat(t)\
-end\
-\
-_M.command = socket.protect(function(cmdt)\
-    cmdt = override(cmdt)\
-    socket.try(cmdt.host, \"missing hostname\")\
-    socket.try(cmdt.command, \"missing command\")\
-    local f = _M.open(cmdt.host, cmdt.port, cmdt.create)\
-    f:greet()\
-    f:login(cmdt.user, cmdt.password)\
-    if type(cmdt.command) == \"table\" then\
-        local argument = cmdt.argument or {}\
-        local check = cmdt.check or {}\
-        for i,cmd in ipairs(cmdt.command) do\
-            f.try(f.tp:command(cmd, argument[i]))\
-            if check[i] then f.try(f.tp:check(check[i])) end\
-        end\
-    else\
-        f.try(f.tp:command(cmdt.command, cmdt.argument))\
-        if cmdt.check then f.try(f.tp:check(cmdt.check)) end\
-    end\
-    f:quit()\
-    return f:close()\
-end)\
-\
-_M.get = socket.protect(function(gett)\
-    if base.type(gett) == \"string\" then return sget(gett)\
-    else return tget(gett) end\
-end)\
-\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- FTP support for the Lua language\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module and import dependencies\n\
+-----------------------------------------------------------------------------\n\
+local base = _G\n\
+local table = require(\"table\")\n\
+local string = require(\"string\")\n\
+local math = require(\"math\")\n\
+local socket = require(\"socket\")\n\
+local url = require(\"socket.url\")\n\
+local tp = require(\"socket.tp\")\n\
+local ltn12 = require(\"ltn12\")\n\
+socket.ftp = {}\n\
+local _M = socket.ftp\n\
+-----------------------------------------------------------------------------\n\
+-- Program constants\n\
+-----------------------------------------------------------------------------\n\
+-- timeout in seconds before the program gives up on a connection\n\
+_M.TIMEOUT = 60\n\
+-- default port for ftp service\n\
+local PORT = 21\n\
+-- this is the default anonymous password. used when no password is\n\
+-- provided in url. should be changed to your e-mail.\n\
+_M.USER = \"ftp\"\n\
+_M.PASSWORD = \"anonymous@anonymous.org\"\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Low level FTP API\n\
+-----------------------------------------------------------------------------\n\
+local metat = { __index = {} }\n\
+\n\
+function _M.open(server, port, create)\n\
+    local tp = socket.try(tp.connect(server, port or PORT, _M.TIMEOUT, create))\n\
+    local f = base.setmetatable({ tp = tp }, metat)\n\
+    -- make sure everything gets closed in an exception\n\
+    f.try = socket.newtry(function() f:close() end)\n\
+    return f\n\
+end\n\
+\n\
+function metat.__index:portconnect()\n\
+    self.try(self.server:settimeout(_M.TIMEOUT))\n\
+    self.data = self.try(self.server:accept())\n\
+    self.try(self.data:settimeout(_M.TIMEOUT))\n\
+end\n\
+\n\
+function metat.__index:pasvconnect()\n\
+    self.data = self.try(socket.tcp())\n\
+    self.try(self.data:settimeout(_M.TIMEOUT))\n\
+    self.try(self.data:connect(self.pasvt.address, self.pasvt.port))\n\
+end\n\
+\n\
+function metat.__index:login(user, password)\n\
+    self.try(self.tp:command(\"user\", user or _M.USER))\n\
+    local code, _ = self.try(self.tp:check{\"2..\", 331})\n\
+    if code == 331 then\n\
+        self.try(self.tp:command(\"pass\", password or _M.PASSWORD))\n\
+        self.try(self.tp:check(\"2..\"))\n\
+    end\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:pasv()\n\
+    self.try(self.tp:command(\"pasv\"))\n\
+    local _, reply = self.try(self.tp:check(\"2..\"))\n\
+    local pattern = \"(%d+)%D(%d+)%D(%d+)%D(%d+)%D(%d+)%D(%d+)\"\n\
+    local a, b, c, d, p1, p2 = socket.skip(2, string.find(reply, pattern))\n\
+    self.try(a and b and c and d and p1 and p2, reply)\n\
+    self.pasvt = {\n\
+        address = string.format(\"%d.%d.%d.%d\", a, b, c, d),\n\
+        port = p1*256 + p2\n\
+    }\n\
+    if self.server then\n\
+        self.server:close()\n\
+        self.server = nil\n\
+    end\n\
+    return self.pasvt.address, self.pasvt.port\n\
+end\n\
+\n\
+function metat.__index:epsv()\n\
+    self.try(self.tp:command(\"epsv\"))\n\
+    local _, reply = self.try(self.tp:check(\"229\"))\n\
+    local pattern = \"%((.)(.-)%1(.-)%1(.-)%1%)\"\n\
+    local _, _, _, port = string.match(reply, pattern)\n\
+    self.try(port, \"invalid epsv response\")\n\
+    self.pasvt = {\n\
+        address = self.tp:getpeername(),\n\
+        port = port\n\
+    }\n\
+    if self.server then\n\
+        self.server:close()\n\
+        self.server = nil\n\
+    end\n\
+    return self.pasvt.address, self.pasvt.port\n\
+end\n\
+\n\
+\n\
+function metat.__index:port(address, port)\n\
+    self.pasvt = nil\n\
+    if not address then\n\
+        address = self.try(self.tp:getsockname())\n\
+        self.server = self.try(socket.bind(address, 0))\n\
+        address, port = self.try(self.server:getsockname())\n\
+        self.try(self.server:settimeout(_M.TIMEOUT))\n\
+    end\n\
+    local pl = math.mod(port, 256)\n\
+    local ph = (port - pl)/256\n\
+    local arg = string.gsub(string.format(\"%s,%d,%d\", address, ph, pl), \"%.\", \",\")\n\
+    self.try(self.tp:command(\"port\", arg))\n\
+    self.try(self.tp:check(\"2..\"))\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:eprt(family, address, port)\n\
+    self.pasvt = nil\n\
+    if not address then\n\
+        address = self.try(self.tp:getsockname())\n\
+        self.server = self.try(socket.bind(address, 0))\n\
+        address, port = self.try(self.server:getsockname())\n\
+        self.try(self.server:settimeout(_M.TIMEOUT))\n\
+    end\n\
+    local arg = string.format(\"|%s|%s|%d|\", family, address, port)\n\
+    self.try(self.tp:command(\"eprt\", arg))\n\
+    self.try(self.tp:check(\"2..\"))\n\
+    return 1\n\
+end\n\
+\n\
+\n\
+function metat.__index:send(sendt)\n\
+    self.try(self.pasvt or self.server, \"need port or pasv first\")\n\
+    -- if there is a pasvt table, we already sent a PASV command\n\
+    -- we just get the data connection into self.data\n\
+    if self.pasvt then self:pasvconnect() end\n\
+    -- get the transfer argument and command\n\
+    local argument = sendt.argument or\n\
+        url.unescape(string.gsub(sendt.path or \"\", \"^[/\\\\]\", \"\"))\n\
+    if argument == \"\" then argument = nil end\n\
+    local command = sendt.command or \"stor\"\n\
+    -- send the transfer command and check the reply\n\
+    self.try(self.tp:command(command, argument))\n\
+    local code, _ = self.try(self.tp:check{\"2..\", \"1..\"})\n\
+    -- if there is not a pasvt table, then there is a server\n\
+    -- and we already sent a PORT command\n\
+    if not self.pasvt then self:portconnect() end\n\
+    -- get the sink, source and step for the transfer\n\
+    local step = sendt.step or ltn12.pump.step\n\
+    local readt = { self.tp }\n\
+    local checkstep = function(src, snk)\n\
+        -- check status in control connection while downloading\n\
+        local readyt = socket.select(readt, nil, 0)\n\
+        if readyt[tp] then code = self.try(self.tp:check(\"2..\")) end\n\
+        return step(src, snk)\n\
+    end\n\
+    local sink = socket.sink(\"close-when-done\", self.data)\n\
+    -- transfer all data and check error\n\
+    self.try(ltn12.pump.all(sendt.source, sink, checkstep))\n\
+    if string.find(code, \"1..\") then self.try(self.tp:check(\"2..\")) end\n\
+    -- done with data connection\n\
+    self.data:close()\n\
+    -- find out how many bytes were sent\n\
+    local sent = socket.skip(1, self.data:getstats())\n\
+    self.data = nil\n\
+    return sent\n\
+end\n\
+\n\
+function metat.__index:receive(recvt)\n\
+    self.try(self.pasvt or self.server, \"need port or pasv first\")\n\
+    if self.pasvt then self:pasvconnect() end\n\
+    local argument = recvt.argument or\n\
+        url.unescape(string.gsub(recvt.path or \"\", \"^[/\\\\]\", \"\"))\n\
+    if argument == \"\" then argument = nil end\n\
+    local command = recvt.command or \"retr\"\n\
+    self.try(self.tp:command(command, argument))\n\
+    local code,reply = self.try(self.tp:check{\"1..\", \"2..\"})\n\
+    if (code >= 200) and (code <= 299) then\n\
+        recvt.sink(reply)\n\
+        return 1\n\
+    end\n\
+    if not self.pasvt then self:portconnect() end\n\
+    local source = socket.source(\"until-closed\", self.data)\n\
+    local step = recvt.step or ltn12.pump.step\n\
+    self.try(ltn12.pump.all(source, recvt.sink, step))\n\
+    if string.find(code, \"1..\") then self.try(self.tp:check(\"2..\")) end\n\
+    self.data:close()\n\
+    self.data = nil\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:cwd(dir)\n\
+    self.try(self.tp:command(\"cwd\", dir))\n\
+    self.try(self.tp:check(250))\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:type(type)\n\
+    self.try(self.tp:command(\"type\", type))\n\
+    self.try(self.tp:check(200))\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:greet()\n\
+    local code = self.try(self.tp:check{\"1..\", \"2..\"})\n\
+    if string.find(code, \"1..\") then self.try(self.tp:check(\"2..\")) end\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:quit()\n\
+    self.try(self.tp:command(\"quit\"))\n\
+    self.try(self.tp:check(\"2..\"))\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:close()\n\
+    if self.data then self.data:close() end\n\
+    if self.server then self.server:close() end\n\
+    return self.tp:close()\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- High level FTP API\n\
+-----------------------------------------------------------------------------\n\
+local function override(t)\n\
+    if t.url then\n\
+        local u = url.parse(t.url)\n\
+        for i,v in base.pairs(t) do\n\
+            u[i] = v\n\
+        end\n\
+        return u\n\
+    else return t end\n\
+end\n\
+\n\
+local function tput(putt)\n\
+    putt = override(putt)\n\
+    socket.try(putt.host, \"missing hostname\")\n\
+    local f = _M.open(putt.host, putt.port, putt.create)\n\
+    f:greet()\n\
+    f:login(putt.user, putt.password)\n\
+    if putt.type then f:type(putt.type) end\n\
+    f:epsv()\n\
+    local sent = f:send(putt)\n\
+    f:quit()\n\
+    f:close()\n\
+    return sent\n\
+end\n\
+\n\
+local default = {\n\
+    path = \"/\",\n\
+    scheme = \"ftp\"\n\
+}\n\
+\n\
+local function genericform(u)\n\
+    local t = socket.try(url.parse(u, default))\n\
+    socket.try(t.scheme == \"ftp\", \"wrong scheme '\" .. t.scheme .. \"'\")\n\
+    socket.try(t.host, \"missing hostname\")\n\
+    local pat = \"^type=(.)$\"\n\
+    if t.params then\n\
+        t.type = socket.skip(2, string.find(t.params, pat))\n\
+        socket.try(t.type == \"a\" or t.type == \"i\",\n\
+            \"invalid type '\" .. t.type .. \"'\")\n\
+    end\n\
+    return t\n\
+end\n\
+\n\
+_M.genericform = genericform\n\
+\n\
+local function sput(u, body)\n\
+    local putt = genericform(u)\n\
+    putt.source = ltn12.source.string(body)\n\
+    return tput(putt)\n\
+end\n\
+\n\
+_M.put = socket.protect(function(putt, body)\n\
+    if base.type(putt) == \"string\" then return sput(putt, body)\n\
+    else return tput(putt) end\n\
+end)\n\
+\n\
+local function tget(gett)\n\
+    gett = override(gett)\n\
+    socket.try(gett.host, \"missing hostname\")\n\
+    local f = _M.open(gett.host, gett.port, gett.create)\n\
+    f:greet()\n\
+    f:login(gett.user, gett.password)\n\
+    if gett.type then f:type(gett.type) end\n\
+    f:epsv()\n\
+    f:receive(gett)\n\
+    f:quit()\n\
+    return f:close()\n\
+end\n\
+\n\
+local function sget(u)\n\
+    local gett = genericform(u)\n\
+    local t = {}\n\
+    gett.sink = ltn12.sink.table(t)\n\
+    tget(gett)\n\
+    return table.concat(t)\n\
+end\n\
+\n\
+_M.command = socket.protect(function(cmdt)\n\
+    cmdt = override(cmdt)\n\
+    socket.try(cmdt.host, \"missing hostname\")\n\
+    socket.try(cmdt.command, \"missing command\")\n\
+    local f = _M.open(cmdt.host, cmdt.port, cmdt.create)\n\
+    f:greet()\n\
+    f:login(cmdt.user, cmdt.password)\n\
+    if type(cmdt.command) == \"table\" then\n\
+        local argument = cmdt.argument or {}\n\
+        local check = cmdt.check or {}\n\
+        for i,cmd in ipairs(cmdt.command) do\n\
+            f.try(f.tp:command(cmd, argument[i]))\n\
+            if check[i] then f.try(f.tp:check(check[i])) end\n\
+        end\n\
+    else\n\
+        f.try(f.tp:command(cmdt.command, cmdt.argument))\n\
+        if cmdt.check then f.try(f.tp:check(cmdt.check)) end\n\
+    end\n\
+    f:quit()\n\
+    return f:close()\n\
+end)\n\
+\n\
+_M.get = socket.protect(function(gett)\n\
+    if base.type(gett) == \"string\" then return sget(gett)\n\
+    else return tget(gett) end\n\
+end)\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_ftp (lua_State *L) {
-  return luaL_loadbuffer(L,lau_ftp,sizeof(lau_ftp),"ftp"); }
+  return lau_loadlua(L,lau_ftp,sizeof(lau_ftp),"socket.ftp"); }
 
 /* luasocket-3.0.0/src/headers.lua */
 static const char lau_headers[] = "\
------------------------------------------------------------------------------\
--- Canonic header field capitalization\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-local socket = require(\"socket\")\
-socket.headers = {}\
-local _M = socket.headers\
-\
-_M.canonic = {\
-    [\"accept\"] = \"Accept\",\
-    [\"accept-charset\"] = \"Accept-Charset\",\
-    [\"accept-encoding\"] = \"Accept-Encoding\",\
-    [\"accept-language\"] = \"Accept-Language\",\
-    [\"accept-ranges\"] = \"Accept-Ranges\",\
-    [\"action\"] = \"Action\",\
-    [\"alternate-recipient\"] = \"Alternate-Recipient\",\
-    [\"age\"] = \"Age\",\
-    [\"allow\"] = \"Allow\",\
-    [\"arrival-date\"] = \"Arrival-Date\",\
-    [\"authorization\"] = \"Authorization\",\
-    [\"bcc\"] = \"Bcc\",\
-    [\"cache-control\"] = \"Cache-Control\",\
-    [\"cc\"] = \"Cc\",\
-    [\"comments\"] = \"Comments\",\
-    [\"connection\"] = \"Connection\",\
-    [\"content-description\"] = \"Content-Description\",\
-    [\"content-disposition\"] = \"Content-Disposition\",\
-    [\"content-encoding\"] = \"Content-Encoding\",\
-    [\"content-id\"] = \"Content-ID\",\
-    [\"content-language\"] = \"Content-Language\",\
-    [\"content-length\"] = \"Content-Length\",\
-    [\"content-location\"] = \"Content-Location\",\
-    [\"content-md5\"] = \"Content-MD5\",\
-    [\"content-range\"] = \"Content-Range\",\
-    [\"content-transfer-encoding\"] = \"Content-Transfer-Encoding\",\
-    [\"content-type\"] = \"Content-Type\",\
-    [\"cookie\"] = \"Cookie\",\
-    [\"date\"] = \"Date\",\
-    [\"diagnostic-code\"] = \"Diagnostic-Code\",\
-    [\"dsn-gateway\"] = \"DSN-Gateway\",\
-    [\"etag\"] = \"ETag\",\
-    [\"expect\"] = \"Expect\",\
-    [\"expires\"] = \"Expires\",\
-    [\"final-log-id\"] = \"Final-Log-ID\",\
-    [\"final-recipient\"] = \"Final-Recipient\",\
-    [\"from\"] = \"From\",\
-    [\"host\"] = \"Host\",\
-    [\"if-match\"] = \"If-Match\",\
-    [\"if-modified-since\"] = \"If-Modified-Since\",\
-    [\"if-none-match\"] = \"If-None-Match\",\
-    [\"if-range\"] = \"If-Range\",\
-    [\"if-unmodified-since\"] = \"If-Unmodified-Since\",\
-    [\"in-reply-to\"] = \"In-Reply-To\",\
-    [\"keywords\"] = \"Keywords\",\
-    [\"last-attempt-date\"] = \"Last-Attempt-Date\",\
-    [\"last-modified\"] = \"Last-Modified\",\
-    [\"location\"] = \"Location\",\
-    [\"max-forwards\"] = \"Max-Forwards\",\
-    [\"message-id\"] = \"Message-ID\",\
-    [\"mime-version\"] = \"MIME-Version\",\
-    [\"original-envelope-id\"] = \"Original-Envelope-ID\",\
-    [\"original-recipient\"] = \"Original-Recipient\",\
-    [\"pragma\"] = \"Pragma\",\
-    [\"proxy-authenticate\"] = \"Proxy-Authenticate\",\
-    [\"proxy-authorization\"] = \"Proxy-Authorization\",\
-    [\"range\"] = \"Range\",\
-    [\"received\"] = \"Received\",\
-    [\"received-from-mta\"] = \"Received-From-MTA\",\
-    [\"references\"] = \"References\",\
-    [\"referer\"] = \"Referer\",\
-    [\"remote-mta\"] = \"Remote-MTA\",\
-    [\"reply-to\"] = \"Reply-To\",\
-    [\"reporting-mta\"] = \"Reporting-MTA\",\
-    [\"resent-bcc\"] = \"Resent-Bcc\",\
-    [\"resent-cc\"] = \"Resent-Cc\",\
-    [\"resent-date\"] = \"Resent-Date\",\
-    [\"resent-from\"] = \"Resent-From\",\
-    [\"resent-message-id\"] = \"Resent-Message-ID\",\
-    [\"resent-reply-to\"] = \"Resent-Reply-To\",\
-    [\"resent-sender\"] = \"Resent-Sender\",\
-    [\"resent-to\"] = \"Resent-To\",\
-    [\"retry-after\"] = \"Retry-After\",\
-    [\"return-path\"] = \"Return-Path\",\
-    [\"sender\"] = \"Sender\",\
-    [\"server\"] = \"Server\",\
-    [\"smtp-remote-recipient\"] = \"SMTP-Remote-Recipient\",\
-    [\"status\"] = \"Status\",\
-    [\"subject\"] = \"Subject\",\
-    [\"te\"] = \"TE\",\
-    [\"to\"] = \"To\",\
-    [\"trailer\"] = \"Trailer\",\
-    [\"transfer-encoding\"] = \"Transfer-Encoding\",\
-    [\"upgrade\"] = \"Upgrade\",\
-    [\"user-agent\"] = \"User-Agent\",\
-    [\"vary\"] = \"Vary\",\
-    [\"via\"] = \"Via\",\
-    [\"warning\"] = \"Warning\",\
-    [\"will-retry-until\"] = \"Will-Retry-Until\",\
-    [\"www-authenticate\"] = \"WWW-Authenticate\",\
-    [\"x-mailer\"] = \"X-Mailer\",\
-}\
-\
-return _M\
+-----------------------------------------------------------------------------\n\
+-- Canonic header field capitalization\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+local socket = require(\"socket\")\n\
+socket.headers = {}\n\
+local _M = socket.headers\n\
+\n\
+_M.canonic = {\n\
+    [\"accept\"] = \"Accept\",\n\
+    [\"accept-charset\"] = \"Accept-Charset\",\n\
+    [\"accept-encoding\"] = \"Accept-Encoding\",\n\
+    [\"accept-language\"] = \"Accept-Language\",\n\
+    [\"accept-ranges\"] = \"Accept-Ranges\",\n\
+    [\"action\"] = \"Action\",\n\
+    [\"alternate-recipient\"] = \"Alternate-Recipient\",\n\
+    [\"age\"] = \"Age\",\n\
+    [\"allow\"] = \"Allow\",\n\
+    [\"arrival-date\"] = \"Arrival-Date\",\n\
+    [\"authorization\"] = \"Authorization\",\n\
+    [\"bcc\"] = \"Bcc\",\n\
+    [\"cache-control\"] = \"Cache-Control\",\n\
+    [\"cc\"] = \"Cc\",\n\
+    [\"comments\"] = \"Comments\",\n\
+    [\"connection\"] = \"Connection\",\n\
+    [\"content-description\"] = \"Content-Description\",\n\
+    [\"content-disposition\"] = \"Content-Disposition\",\n\
+    [\"content-encoding\"] = \"Content-Encoding\",\n\
+    [\"content-id\"] = \"Content-ID\",\n\
+    [\"content-language\"] = \"Content-Language\",\n\
+    [\"content-length\"] = \"Content-Length\",\n\
+    [\"content-location\"] = \"Content-Location\",\n\
+    [\"content-md5\"] = \"Content-MD5\",\n\
+    [\"content-range\"] = \"Content-Range\",\n\
+    [\"content-transfer-encoding\"] = \"Content-Transfer-Encoding\",\n\
+    [\"content-type\"] = \"Content-Type\",\n\
+    [\"cookie\"] = \"Cookie\",\n\
+    [\"date\"] = \"Date\",\n\
+    [\"diagnostic-code\"] = \"Diagnostic-Code\",\n\
+    [\"dsn-gateway\"] = \"DSN-Gateway\",\n\
+    [\"etag\"] = \"ETag\",\n\
+    [\"expect\"] = \"Expect\",\n\
+    [\"expires\"] = \"Expires\",\n\
+    [\"final-log-id\"] = \"Final-Log-ID\",\n\
+    [\"final-recipient\"] = \"Final-Recipient\",\n\
+    [\"from\"] = \"From\",\n\
+    [\"host\"] = \"Host\",\n\
+    [\"if-match\"] = \"If-Match\",\n\
+    [\"if-modified-since\"] = \"If-Modified-Since\",\n\
+    [\"if-none-match\"] = \"If-None-Match\",\n\
+    [\"if-range\"] = \"If-Range\",\n\
+    [\"if-unmodified-since\"] = \"If-Unmodified-Since\",\n\
+    [\"in-reply-to\"] = \"In-Reply-To\",\n\
+    [\"keywords\"] = \"Keywords\",\n\
+    [\"last-attempt-date\"] = \"Last-Attempt-Date\",\n\
+    [\"last-modified\"] = \"Last-Modified\",\n\
+    [\"location\"] = \"Location\",\n\
+    [\"max-forwards\"] = \"Max-Forwards\",\n\
+    [\"message-id\"] = \"Message-ID\",\n\
+    [\"mime-version\"] = \"MIME-Version\",\n\
+    [\"original-envelope-id\"] = \"Original-Envelope-ID\",\n\
+    [\"original-recipient\"] = \"Original-Recipient\",\n\
+    [\"pragma\"] = \"Pragma\",\n\
+    [\"proxy-authenticate\"] = \"Proxy-Authenticate\",\n\
+    [\"proxy-authorization\"] = \"Proxy-Authorization\",\n\
+    [\"range\"] = \"Range\",\n\
+    [\"received\"] = \"Received\",\n\
+    [\"received-from-mta\"] = \"Received-From-MTA\",\n\
+    [\"references\"] = \"References\",\n\
+    [\"referer\"] = \"Referer\",\n\
+    [\"remote-mta\"] = \"Remote-MTA\",\n\
+    [\"reply-to\"] = \"Reply-To\",\n\
+    [\"reporting-mta\"] = \"Reporting-MTA\",\n\
+    [\"resent-bcc\"] = \"Resent-Bcc\",\n\
+    [\"resent-cc\"] = \"Resent-Cc\",\n\
+    [\"resent-date\"] = \"Resent-Date\",\n\
+    [\"resent-from\"] = \"Resent-From\",\n\
+    [\"resent-message-id\"] = \"Resent-Message-ID\",\n\
+    [\"resent-reply-to\"] = \"Resent-Reply-To\",\n\
+    [\"resent-sender\"] = \"Resent-Sender\",\n\
+    [\"resent-to\"] = \"Resent-To\",\n\
+    [\"retry-after\"] = \"Retry-After\",\n\
+    [\"return-path\"] = \"Return-Path\",\n\
+    [\"sender\"] = \"Sender\",\n\
+    [\"server\"] = \"Server\",\n\
+    [\"smtp-remote-recipient\"] = \"SMTP-Remote-Recipient\",\n\
+    [\"status\"] = \"Status\",\n\
+    [\"subject\"] = \"Subject\",\n\
+    [\"te\"] = \"TE\",\n\
+    [\"to\"] = \"To\",\n\
+    [\"trailer\"] = \"Trailer\",\n\
+    [\"transfer-encoding\"] = \"Transfer-Encoding\",\n\
+    [\"upgrade\"] = \"Upgrade\",\n\
+    [\"user-agent\"] = \"User-Agent\",\n\
+    [\"vary\"] = \"Vary\",\n\
+    [\"via\"] = \"Via\",\n\
+    [\"warning\"] = \"Warning\",\n\
+    [\"will-retry-until\"] = \"Will-Retry-Until\",\n\
+    [\"www-authenticate\"] = \"WWW-Authenticate\",\n\
+    [\"x-mailer\"] = \"X-Mailer\",\n\
+}\n\
+\n\
+return _M\n\
 ";
 LUAMOD_API int luaopen_headers (lua_State *L) {
-  return luaL_loadbuffer(L,lau_headers,sizeof(lau_headers),"headers"); }
+  return lau_loadlua(L,lau_headers,sizeof(lau_headers),"socket.headers"); }
 
 /* luasocket-3.0.0/src/http.lua */
 static const char lau_http[] = "\
------------------------------------------------------------------------------\
--- HTTP/1.1 client support for the Lua language.\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module and import dependencies\
--------------------------------------------------------------------------------\
-local socket = require(\"socket\")\
-local url = require(\"socket.url\")\
-local ltn12 = require(\"ltn12\")\
-local mime = require(\"mime\")\
-local string = require(\"string\")\
-local headers = require(\"socket.headers\")\
-local base = _G\
-local table = require(\"table\")\
-socket.http = {}\
-local _M = socket.http\
-\
------------------------------------------------------------------------------\
--- Program constants\
------------------------------------------------------------------------------\
--- connection timeout in seconds\
-_M.TIMEOUT = 60\
--- user agent field sent in request\
-_M.USERAGENT = socket._VERSION\
-\
--- supported schemes and their particulars\
-local SCHEMES = {\
-    http = {\
-        port = 80\
-        , create = function(t)\
-            return socket.tcp end }\
-    , https = {\
-        port = 443\
-        , create = function(t)\
-          local https = assert(\
-            require(\"ssl.https\"), 'LuaSocket: LuaSec not found')\
-          local tcp = assert(\
-            https.tcp, 'LuaSocket: Function tcp() not available from LuaSec')\
-          return tcp(t) end }}\
-\
------------------------------------------------------------------------------\
--- Reads MIME headers from a connection, unfolding where needed\
------------------------------------------------------------------------------\
-local function receiveheaders(sock, headers)\
-    local line, name, value, err\
-    headers = headers or {}\
-    -- get first line\
-    line, err = sock:receive()\
-    if err then return nil, err end\
-    -- headers go until a blank line is found\
-    while line ~= \"\" do\
-        -- get field-name and value\
-        name, value = socket.skip(2, string.find(line, \"^(.-):%s*(.*)\"))\
-        if not (name and value) then return nil, \"malformed reponse headers\" end\
-        name = string.lower(name)\
-        -- get next line (value might be folded)\
-        line, err  = sock:receive()\
-        if err then return nil, err end\
-        -- unfold any folded values\
-        while string.find(line, \"^%s\") do\
-            value = value .. line\
-            line = sock:receive()\
-            if err then return nil, err end\
-        end\
-        -- save pair in table\
-        if headers[name] then headers[name] = headers[name] .. \", \" .. value\
-        else headers[name] = value end\
-    end\
-    return headers\
-end\
-\
------------------------------------------------------------------------------\
--- Extra sources and sinks\
------------------------------------------------------------------------------\
-socket.sourcet[\"http-chunked\"] = function(sock, headers)\
-    return base.setmetatable({\
-        getfd = function() return sock:getfd() end,\
-        dirty = function() return sock:dirty() end\
-    }, {\
-        __call = function()\
-            -- get chunk size, skip extention\
-            local line, err = sock:receive()\
-            if err then return nil, err end\
-            local size = base.tonumber(string.gsub(line, \";.*\", \"\"), 16)\
-            if not size then return nil, \"invalid chunk size\" end\
-            -- was it the last chunk?\
-            if size > 0 then\
-                -- if not, get chunk and skip terminating CRLF\
-                local chunk, err, _ = sock:receive(size)\
-                if chunk then sock:receive() end\
-                return chunk, err\
-            else\
-                -- if it was, read trailers into headers table\
-                headers, err = receiveheaders(sock, headers)\
-                if not headers then return nil, err end\
-            end\
-        end\
-    })\
-end\
-\
-socket.sinkt[\"http-chunked\"] = function(sock)\
-    return base.setmetatable({\
-        getfd = function() return sock:getfd() end,\
-        dirty = function() return sock:dirty() end\
-    }, {\
-        __call = function(self, chunk, err)\
-            if not chunk then return sock:send(\"0\\r\\n\\r\\n\") end\
-            local size = string.format(\"%X\\r\\n\", string.len(chunk))\
-            return sock:send(size ..  chunk .. \"\\r\\n\")\
-        end\
-    })\
-end\
-\
------------------------------------------------------------------------------\
--- Low level HTTP API\
------------------------------------------------------------------------------\
-local metat = { __index = {} }\
-\
-function _M.open(host, port, create)\
-    -- create socket with user connect function, or with default\
-    local c = socket.try(create())\
-    local h = base.setmetatable({ c = c }, metat)\
-    -- create finalized try\
-    h.try = socket.newtry(function() h:close() end)\
-    -- set timeout before connecting\
-    h.try(c:settimeout(_M.TIMEOUT))\
-    h.try(c:connect(host, port))\
-    -- here everything worked\
-    return h\
-end\
-\
-function metat.__index:sendrequestline(method, uri)\
-    local reqline = string.format(\"%s %s HTTP/1.1\\r\\n\", method or \"GET\", uri)\
-    return self.try(self.c:send(reqline))\
-end\
-\
-function metat.__index:sendheaders(tosend)\
-    local canonic = headers.canonic\
-    local h = \"\\r\\n\"\
-    for f, v in base.pairs(tosend) do\
-        h = (canonic[f] or f) .. \": \" .. v .. \"\\r\\n\" .. h\
-    end\
-    self.try(self.c:send(h))\
-    return 1\
-end\
-\
-function metat.__index:sendbody(headers, source, step)\
-    source = source or ltn12.source.empty()\
-    step = step or ltn12.pump.step\
-    -- if we don't know the size in advance, send chunked and hope for the best\
-    local mode = \"http-chunked\"\
-    if headers[\"content-length\"] then mode = \"keep-open\" end\
-    return self.try(ltn12.pump.all(source, socket.sink(mode, self.c), step))\
-end\
-\
-function metat.__index:receivestatusline()\
-    local status,ec = self.try(self.c:receive(5))\
-    -- identify HTTP/0.9 responses, which do not contain a status line\
-    -- this is just a heuristic, but is what the RFC recommends\
-    if status ~= \"HTTP/\" then\
-        if ec == \"timeout\" then\
-            return 408\
-        end\
-        return nil, status\
-    end\
-    -- otherwise proceed reading a status line\
-    status = self.try(self.c:receive(\"*l\", status))\
-    local code = socket.skip(2, string.find(status, \"HTTP/%d*%.%d* (%d%d%d)\"))\
-    return self.try(base.tonumber(code), status)\
-end\
-\
-function metat.__index:receiveheaders()\
-    return self.try(receiveheaders(self.c))\
-end\
-\
-function metat.__index:receivebody(headers, sink, step)\
-    sink = sink or ltn12.sink.null()\
-    step = step or ltn12.pump.step\
-    local length = base.tonumber(headers[\"content-length\"])\
-    local t = headers[\"transfer-encoding\"] -- shortcut\
-    local mode = \"default\" -- connection close\
-    if t and t ~= \"identity\" then mode = \"http-chunked\"\
-    elseif base.tonumber(headers[\"content-length\"]) then mode = \"by-length\" end\
-    return self.try(ltn12.pump.all(socket.source(mode, self.c, length),\
-        sink, step))\
-end\
-\
-function metat.__index:receive09body(status, sink, step)\
-    local source = ltn12.source.rewind(socket.source(\"until-closed\", self.c))\
-    source(status)\
-    return self.try(ltn12.pump.all(source, sink, step))\
-end\
-\
-function metat.__index:close()\
-    return self.c:close()\
-end\
-\
------------------------------------------------------------------------------\
--- High level HTTP API\
------------------------------------------------------------------------------\
-local function adjusturi(reqt)\
-    local u = reqt\
-    -- if there is a proxy, we need the full url. otherwise, just a part.\
-    if not reqt.proxy and not _M.PROXY then\
-        u = {\
-           path = socket.try(reqt.path, \"invalid path 'nil'\"),\
-           params = reqt.params,\
-           query = reqt.query,\
-           fragment = reqt.fragment\
-        }\
-    end\
-    return url.build(u)\
-end\
-\
-local function adjustproxy(reqt)\
-    local proxy = reqt.proxy or _M.PROXY\
-    if proxy then\
-        proxy = url.parse(proxy)\
-        return proxy.host, proxy.port or 3128\
-    else\
-        return reqt.host, reqt.port\
-    end\
-end\
-\
-local function adjustheaders(reqt)\
-    -- default headers\
-    local host = reqt.host\
-    local port = tostring(reqt.port)\
-    if port ~= tostring(SCHEMES[reqt.scheme].port) then\
-        host = host .. ':' .. port end\
-    local lower = {\
-        [\"user-agent\"] = _M.USERAGENT,\
-        [\"host\"] = host,\
-        [\"connection\"] = \"close, TE\",\
-        [\"te\"] = \"trailers\"\
-    }\
-    -- if we have authentication information, pass it along\
-    if reqt.user and reqt.password then\
-        lower[\"authorization\"] =\
-            \"Basic \" ..  (mime.b64(reqt.user .. \":\" ..\
-		url.unescape(reqt.password)))\
-    end\
-    -- if we have proxy authentication information, pass it along\
-    local proxy = reqt.proxy or _M.PROXY\
-    if proxy then\
-        proxy = url.parse(proxy)\
-        if proxy.user and proxy.password then\
-            lower[\"proxy-authorization\"] =\
-                \"Basic \" ..  (mime.b64(proxy.user .. \":\" .. proxy.password))\
-        end\
-    end\
-    -- override with user headers\
-    for i,v in base.pairs(reqt.headers or lower) do\
-        lower[string.lower(i)] = v\
-    end\
-    return lower\
-end\
-\
--- default url parts\
-local default = {\
-    path =\"/\"\
-    , scheme = \"http\"\
-}\
-\
-local function adjustrequest(reqt)\
-    -- parse url if provided\
-    local nreqt = reqt.url and url.parse(reqt.url, default) or {}\
-    -- explicit components override url\
-    for i,v in base.pairs(reqt) do nreqt[i] = v end\
-    -- default to scheme particulars\
-    local schemedefs, host, port, method\
-        = SCHEMES[nreqt.scheme], nreqt.host, nreqt.port, nreqt.method\
-    if not nreqt.create then nreqt.create = schemedefs.create(nreqt) end\
-    if not (port and port ~= '') then nreqt.port = schemedefs.port end\
-    if not (method and method ~= '') then nreqt.method = 'GET' end\
-    if not (host and host ~= \"\") then\
-        socket.try(nil, \"invalid host '\" .. base.tostring(nreqt.host) .. \"'\")\
-    end\
-    -- compute uri if user hasn't overriden\
-    nreqt.uri = reqt.uri or adjusturi(nreqt)\
-    -- adjust headers in request\
-    nreqt.headers = adjustheaders(nreqt)\
-    if nreqt.source\
-        and not nreqt.headers[\"content-length\"]\
-        and not nreqt.headers[\"transfer-encoding\"]\
-    then\
-        nreqt.headers[\"transfer-encoding\"] = \"chunked\"\
-    end\
-\
-    -- ajust host and port if there is a proxy\
-    nreqt.host, nreqt.port = adjustproxy(nreqt)\
-    return nreqt\
-end\
-\
-local function shouldredirect(reqt, code, headers)\
-    local location = headers.location\
-    if not location then return false end\
-    location = string.gsub(location, \"%s\", \"\")\
-    if location == \"\" then return false end\
-    local scheme = url.parse(location).scheme\
-    if scheme and (not SCHEMES[scheme]) then return false end\
-    -- avoid https downgrades\
-    if ('https' == reqt.scheme) and ('https' ~= scheme) then return false end\
-    return (reqt.redirect ~= false) and\
-           (code == 301 or code == 302 or code == 303 or code == 307) and\
-           (not reqt.method or reqt.method == \"GET\" or reqt.method == \"HEAD\")\
-        and ((false == reqt.maxredirects)\
-                or ((reqt.nredirects or 0)\
-                        < (reqt.maxredirects or 5)))\
-end\
-\
-local function shouldreceivebody(reqt, code)\
-    if reqt.method == \"HEAD\" then return nil end\
-    if code == 204 or code == 304 then return nil end\
-    if code >= 100 and code < 200 then return nil end\
-    return 1\
-end\
-\
--- forward declarations\
-local trequest, tredirect\
-\
---[[local]] function tredirect(reqt, location)\
-    -- the RFC says the redirect URL has to be absolute, but some\
-    -- servers do not respect that\
-    local newurl = url.absolute(reqt.url, location)\
-    -- if switching schemes, reset port and create function\
-    if url.parse(newurl).scheme ~= reqt.scheme then\
-        reqt.port = nil\
-        reqt.create = nil end\
-    -- make new request\
-    local result, code, headers, status = trequest {\
-        url = newurl,\
-        source = reqt.source,\
-        sink = reqt.sink,\
-        headers = reqt.headers,\
-        proxy = reqt.proxy,\
-        maxredirects = reqt.maxredirects,\
-        nredirects = (reqt.nredirects or 0) + 1,\
-        create = reqt.create\
-    }\
-    -- pass location header back as a hint we redirected\
-    headers = headers or {}\
-    headers.location = headers.location or location\
-    return result, code, headers, status\
-end\
-\
---[[local]] function trequest(reqt)\
-    -- we loop until we get what we want, or\
-    -- until we are sure there is no way to get it\
-    local nreqt = adjustrequest(reqt)\
-    local h = _M.open(nreqt.host, nreqt.port, nreqt.create)\
-    -- send request line and headers\
-    h:sendrequestline(nreqt.method, nreqt.uri)\
-    h:sendheaders(nreqt.headers)\
-    -- if there is a body, send it\
-    if nreqt.source then\
-        h:sendbody(nreqt.headers, nreqt.source, nreqt.step)\
-    end\
-    local code, status = h:receivestatusline()\
-    -- if it is an HTTP/0.9 server, simply get the body and we are done\
-    if not code then\
-        h:receive09body(status, nreqt.sink, nreqt.step)\
-        return 1, 200\
-    elseif code == 408 then\
-        return 1, code\
-    end\
-    local headers\
-    -- ignore any 100-continue messages\
-    while code == 100 do\
-        h:receiveheaders()\
-        code, status = h:receivestatusline()\
-    end\
-    headers = h:receiveheaders()\
-    -- at this point we should have a honest reply from the server\
-    -- we can't redirect if we already used the source, so we report the error\
-    if shouldredirect(nreqt, code, headers) and not nreqt.source then\
-        h:close()\
-        return tredirect(reqt, headers.location)\
-    end\
-    -- here we are finally done\
-    if shouldreceivebody(nreqt, code) then\
-        h:receivebody(headers, nreqt.sink, nreqt.step)\
-    end\
-    h:close()\
-    return 1, code, headers, status\
-end\
-\
--- turns an url and a body into a generic request\
-local function genericform(u, b)\
-    local t = {}\
-    local reqt = {\
-        url = u,\
-        sink = ltn12.sink.table(t),\
-        target = t\
-    }\
-    if b then\
-        reqt.source = ltn12.source.string(b)\
-        reqt.headers = {\
-            [\"content-length\"] = string.len(b),\
-            [\"content-type\"] = \"application/x-www-form-urlencoded\"\
-        }\
-        reqt.method = \"POST\"\
-    end\
-    return reqt\
-end\
-\
-_M.genericform = genericform\
-\
-local function srequest(u, b)\
-    local reqt = genericform(u, b)\
-    local _, code, headers, status = trequest(reqt)\
-    return table.concat(reqt.target), code, headers, status\
-end\
-\
-_M.request = socket.protect(function(reqt, body)\
-    if base.type(reqt) == \"string\" then return srequest(reqt, body)\
-    else return trequest(reqt) end\
-end)\
-\
-_M.schemes = SCHEMES\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- HTTP/1.1 client support for the Lua language.\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module and import dependencies\n\
+-------------------------------------------------------------------------------\n\
+local socket = require(\"socket\")\n\
+local url = require(\"socket.url\")\n\
+local ltn12 = require(\"ltn12\")\n\
+local mime = require(\"mime\")\n\
+local string = require(\"string\")\n\
+local headers = require(\"socket.headers\")\n\
+local base = _G\n\
+local table = require(\"table\")\n\
+socket.http = {}\n\
+local _M = socket.http\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Program constants\n\
+-----------------------------------------------------------------------------\n\
+-- connection timeout in seconds\n\
+_M.TIMEOUT = 60\n\
+-- user agent field sent in request\n\
+_M.USERAGENT = socket._VERSION\n\
+\n\
+-- supported schemes and their particulars\n\
+local SCHEMES = {\n\
+    http = {\n\
+        port = 80\n\
+        , create = function(t)\n\
+            return socket.tcp end }\n\
+    , https = {\n\
+        port = 443\n\
+        , create = function(t)\n\
+          local https = assert(\n\
+            require(\"ssl.https\"), 'LuaSocket: LuaSec not found')\n\
+          local tcp = assert(\n\
+            https.tcp, 'LuaSocket: Function tcp() not available from LuaSec')\n\
+          return tcp(t) end }}\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Reads MIME headers from a connection, unfolding where needed\n\
+-----------------------------------------------------------------------------\n\
+local function receiveheaders(sock, headers)\n\
+    local line, name, value, err\n\
+    headers = headers or {}\n\
+    -- get first line\n\
+    line, err = sock:receive()\n\
+    if err then return nil, err end\n\
+    -- headers go until a blank line is found\n\
+    while line ~= \"\" do\n\
+        -- get field-name and value\n\
+        name, value = socket.skip(2, string.find(line, \"^(.-):%s*(.*)\"))\n\
+        if not (name and value) then return nil, \"malformed reponse headers\" end\n\
+        name = string.lower(name)\n\
+        -- get next line (value might be folded)\n\
+        line, err  = sock:receive()\n\
+        if err then return nil, err end\n\
+        -- unfold any folded values\n\
+        while string.find(line, \"^%s\") do\n\
+            value = value .. line\n\
+            line = sock:receive()\n\
+            if err then return nil, err end\n\
+        end\n\
+        -- save pair in table\n\
+        if headers[name] then headers[name] = headers[name] .. \", \" .. value\n\
+        else headers[name] = value end\n\
+    end\n\
+    return headers\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Extra sources and sinks\n\
+-----------------------------------------------------------------------------\n\
+socket.sourcet[\"http-chunked\"] = function(sock, headers)\n\
+    return base.setmetatable({\n\
+        getfd = function() return sock:getfd() end,\n\
+        dirty = function() return sock:dirty() end\n\
+    }, {\n\
+        __call = function()\n\
+            -- get chunk size, skip extention\n\
+            local line, err = sock:receive()\n\
+            if err then return nil, err end\n\
+            local size = base.tonumber(string.gsub(line, \";.*\", \"\"), 16)\n\
+            if not size then return nil, \"invalid chunk size\" end\n\
+            -- was it the last chunk?\n\
+            if size > 0 then\n\
+                -- if not, get chunk and skip terminating CRLF\n\
+                local chunk, err, _ = sock:receive(size)\n\
+                if chunk then sock:receive() end\n\
+                return chunk, err\n\
+            else\n\
+                -- if it was, read trailers into headers table\n\
+                headers, err = receiveheaders(sock, headers)\n\
+                if not headers then return nil, err end\n\
+            end\n\
+        end\n\
+    })\n\
+end\n\
+\n\
+socket.sinkt[\"http-chunked\"] = function(sock)\n\
+    return base.setmetatable({\n\
+        getfd = function() return sock:getfd() end,\n\
+        dirty = function() return sock:dirty() end\n\
+    }, {\n\
+        __call = function(self, chunk, err)\n\
+            if not chunk then return sock:send(\"0\\r\\n\\r\\n\") end\n\
+            local size = string.format(\"%X\\r\\n\", string.len(chunk))\n\
+            return sock:send(size ..  chunk .. \"\\r\\n\")\n\
+        end\n\
+    })\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Low level HTTP API\n\
+-----------------------------------------------------------------------------\n\
+local metat = { __index = {} }\n\
+\n\
+function _M.open(host, port, create)\n\
+    -- create socket with user connect function, or with default\n\
+    local c = socket.try(create())\n\
+    local h = base.setmetatable({ c = c }, metat)\n\
+    -- create finalized try\n\
+    h.try = socket.newtry(function() h:close() end)\n\
+    -- set timeout before connecting\n\
+    h.try(c:settimeout(_M.TIMEOUT))\n\
+    h.try(c:connect(host, port))\n\
+    -- here everything worked\n\
+    return h\n\
+end\n\
+\n\
+function metat.__index:sendrequestline(method, uri)\n\
+    local reqline = string.format(\"%s %s HTTP/1.1\\r\\n\", method or \"GET\", uri)\n\
+    return self.try(self.c:send(reqline))\n\
+end\n\
+\n\
+function metat.__index:sendheaders(tosend)\n\
+    local canonic = headers.canonic\n\
+    local h = \"\\r\\n\"\n\
+    for f, v in base.pairs(tosend) do\n\
+        h = (canonic[f] or f) .. \": \" .. v .. \"\\r\\n\" .. h\n\
+    end\n\
+    self.try(self.c:send(h))\n\
+    return 1\n\
+end\n\
+\n\
+function metat.__index:sendbody(headers, source, step)\n\
+    source = source or ltn12.source.empty()\n\
+    step = step or ltn12.pump.step\n\
+    -- if we don't know the size in advance, send chunked and hope for the best\n\
+    local mode = \"http-chunked\"\n\
+    if headers[\"content-length\"] then mode = \"keep-open\" end\n\
+    return self.try(ltn12.pump.all(source, socket.sink(mode, self.c), step))\n\
+end\n\
+\n\
+function metat.__index:receivestatusline()\n\
+    local status,ec = self.try(self.c:receive(5))\n\
+    -- identify HTTP/0.9 responses, which do not contain a status line\n\
+    -- this is just a heuristic, but is what the RFC recommends\n\
+    if status ~= \"HTTP/\" then\n\
+        if ec == \"timeout\" then\n\
+            return 408\n\
+        end\n\
+        return nil, status\n\
+    end\n\
+    -- otherwise proceed reading a status line\n\
+    status = self.try(self.c:receive(\"*l\", status))\n\
+    local code = socket.skip(2, string.find(status, \"HTTP/%d*%.%d* (%d%d%d)\"))\n\
+    return self.try(base.tonumber(code), status)\n\
+end\n\
+\n\
+function metat.__index:receiveheaders()\n\
+    return self.try(receiveheaders(self.c))\n\
+end\n\
+\n\
+function metat.__index:receivebody(headers, sink, step)\n\
+    sink = sink or ltn12.sink.null()\n\
+    step = step or ltn12.pump.step\n\
+    local length = base.tonumber(headers[\"content-length\"])\n\
+    local t = headers[\"transfer-encoding\"] -- shortcut\n\
+    local mode = \"default\" -- connection close\n\
+    if t and t ~= \"identity\" then mode = \"http-chunked\"\n\
+    elseif base.tonumber(headers[\"content-length\"]) then mode = \"by-length\" end\n\
+    return self.try(ltn12.pump.all(socket.source(mode, self.c, length),\n\
+        sink, step))\n\
+end\n\
+\n\
+function metat.__index:receive09body(status, sink, step)\n\
+    local source = ltn12.source.rewind(socket.source(\"until-closed\", self.c))\n\
+    source(status)\n\
+    return self.try(ltn12.pump.all(source, sink, step))\n\
+end\n\
+\n\
+function metat.__index:close()\n\
+    return self.c:close()\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- High level HTTP API\n\
+-----------------------------------------------------------------------------\n\
+local function adjusturi(reqt)\n\
+    local u = reqt\n\
+    -- if there is a proxy, we need the full url. otherwise, just a part.\n\
+    if not reqt.proxy and not _M.PROXY then\n\
+        u = {\n\
+           path = socket.try(reqt.path, \"invalid path 'nil'\"),\n\
+           params = reqt.params,\n\
+           query = reqt.query,\n\
+           fragment = reqt.fragment\n\
+        }\n\
+    end\n\
+    return url.build(u)\n\
+end\n\
+\n\
+local function adjustproxy(reqt)\n\
+    local proxy = reqt.proxy or _M.PROXY\n\
+    if proxy then\n\
+        proxy = url.parse(proxy)\n\
+        return proxy.host, proxy.port or 3128\n\
+    else\n\
+        return reqt.host, reqt.port\n\
+    end\n\
+end\n\
+\n\
+local function adjustheaders(reqt)\n\
+    -- default headers\n\
+    local host = reqt.host\n\
+    local port = tostring(reqt.port)\n\
+    if port ~= tostring(SCHEMES[reqt.scheme].port) then\n\
+        host = host .. ':' .. port end\n\
+    local lower = {\n\
+        [\"user-agent\"] = _M.USERAGENT,\n\
+        [\"host\"] = host,\n\
+        [\"connection\"] = \"close, TE\",\n\
+        [\"te\"] = \"trailers\"\n\
+    }\n\
+    -- if we have authentication information, pass it along\n\
+    if reqt.user and reqt.password then\n\
+        lower[\"authorization\"] =\n\
+            \"Basic \" ..  (mime.b64(reqt.user .. \":\" ..\n\
+		url.unescape(reqt.password)))\n\
+    end\n\
+    -- if we have proxy authentication information, pass it along\n\
+    local proxy = reqt.proxy or _M.PROXY\n\
+    if proxy then\n\
+        proxy = url.parse(proxy)\n\
+        if proxy.user and proxy.password then\n\
+            lower[\"proxy-authorization\"] =\n\
+                \"Basic \" ..  (mime.b64(proxy.user .. \":\" .. proxy.password))\n\
+        end\n\
+    end\n\
+    -- override with user headers\n\
+    for i,v in base.pairs(reqt.headers or lower) do\n\
+        lower[string.lower(i)] = v\n\
+    end\n\
+    return lower\n\
+end\n\
+\n\
+-- default url parts\n\
+local default = {\n\
+    path =\"/\"\n\
+    , scheme = \"http\"\n\
+}\n\
+\n\
+local function adjustrequest(reqt)\n\
+    -- parse url if provided\n\
+    local nreqt = reqt.url and url.parse(reqt.url, default) or {}\n\
+    -- explicit components override url\n\
+    for i,v in base.pairs(reqt) do nreqt[i] = v end\n\
+    -- default to scheme particulars\n\
+    local schemedefs, host, port, method\n\
+        = SCHEMES[nreqt.scheme], nreqt.host, nreqt.port, nreqt.method\n\
+    if not nreqt.create then nreqt.create = schemedefs.create(nreqt) end\n\
+    if not (port and port ~= '') then nreqt.port = schemedefs.port end\n\
+    if not (method and method ~= '') then nreqt.method = 'GET' end\n\
+    if not (host and host ~= \"\") then\n\
+        socket.try(nil, \"invalid host '\" .. base.tostring(nreqt.host) .. \"'\")\n\
+    end\n\
+    -- compute uri if user hasn't overriden\n\
+    nreqt.uri = reqt.uri or adjusturi(nreqt)\n\
+    -- adjust headers in request\n\
+    nreqt.headers = adjustheaders(nreqt)\n\
+    if nreqt.source\n\
+        and not nreqt.headers[\"content-length\"]\n\
+        and not nreqt.headers[\"transfer-encoding\"]\n\
+    then\n\
+        nreqt.headers[\"transfer-encoding\"] = \"chunked\"\n\
+    end\n\
+\n\
+    -- ajust host and port if there is a proxy\n\
+    nreqt.host, nreqt.port = adjustproxy(nreqt)\n\
+    return nreqt\n\
+end\n\
+\n\
+local function shouldredirect(reqt, code, headers)\n\
+    local location = headers.location\n\
+    if not location then return false end\n\
+    location = string.gsub(location, \"%s\", \"\")\n\
+    if location == \"\" then return false end\n\
+    local scheme = url.parse(location).scheme\n\
+    if scheme and (not SCHEMES[scheme]) then return false end\n\
+    -- avoid https downgrades\n\
+    if ('https' == reqt.scheme) and ('https' ~= scheme) then return false end\n\
+    return (reqt.redirect ~= false) and\n\
+           (code == 301 or code == 302 or code == 303 or code == 307) and\n\
+           (not reqt.method or reqt.method == \"GET\" or reqt.method == \"HEAD\")\n\
+        and ((false == reqt.maxredirects)\n\
+                or ((reqt.nredirects or 0)\n\
+                        < (reqt.maxredirects or 5)))\n\
+end\n\
+\n\
+local function shouldreceivebody(reqt, code)\n\
+    if reqt.method == \"HEAD\" then return nil end\n\
+    if code == 204 or code == 304 then return nil end\n\
+    if code >= 100 and code < 200 then return nil end\n\
+    return 1\n\
+end\n\
+\n\
+-- forward declarations\n\
+local trequest, tredirect\n\
+\n\
+--[[local]] function tredirect(reqt, location)\n\
+    -- the RFC says the redirect URL has to be absolute, but some\n\
+    -- servers do not respect that\n\
+    local newurl = url.absolute(reqt.url, location)\n\
+    -- if switching schemes, reset port and create function\n\
+    if url.parse(newurl).scheme ~= reqt.scheme then\n\
+        reqt.port = nil\n\
+        reqt.create = nil end\n\
+    -- make new request\n\
+    local result, code, headers, status = trequest {\n\
+        url = newurl,\n\
+        source = reqt.source,\n\
+        sink = reqt.sink,\n\
+        headers = reqt.headers,\n\
+        proxy = reqt.proxy,\n\
+        maxredirects = reqt.maxredirects,\n\
+        nredirects = (reqt.nredirects or 0) + 1,\n\
+        create = reqt.create\n\
+    }\n\
+    -- pass location header back as a hint we redirected\n\
+    headers = headers or {}\n\
+    headers.location = headers.location or location\n\
+    return result, code, headers, status\n\
+end\n\
+\n\
+--[[local]] function trequest(reqt)\n\
+    -- we loop until we get what we want, or\n\
+    -- until we are sure there is no way to get it\n\
+    local nreqt = adjustrequest(reqt)\n\
+    local h = _M.open(nreqt.host, nreqt.port, nreqt.create)\n\
+    -- send request line and headers\n\
+    h:sendrequestline(nreqt.method, nreqt.uri)\n\
+    h:sendheaders(nreqt.headers)\n\
+    -- if there is a body, send it\n\
+    if nreqt.source then\n\
+        h:sendbody(nreqt.headers, nreqt.source, nreqt.step)\n\
+    end\n\
+    local code, status = h:receivestatusline()\n\
+    -- if it is an HTTP/0.9 server, simply get the body and we are done\n\
+    if not code then\n\
+        h:receive09body(status, nreqt.sink, nreqt.step)\n\
+        return 1, 200\n\
+    elseif code == 408 then\n\
+        return 1, code\n\
+    end\n\
+    local headers\n\
+    -- ignore any 100-continue messages\n\
+    while code == 100 do\n\
+        h:receiveheaders()\n\
+        code, status = h:receivestatusline()\n\
+    end\n\
+    headers = h:receiveheaders()\n\
+    -- at this point we should have a honest reply from the server\n\
+    -- we can't redirect if we already used the source, so we report the error\n\
+    if shouldredirect(nreqt, code, headers) and not nreqt.source then\n\
+        h:close()\n\
+        return tredirect(reqt, headers.location)\n\
+    end\n\
+    -- here we are finally done\n\
+    if shouldreceivebody(nreqt, code) then\n\
+        h:receivebody(headers, nreqt.sink, nreqt.step)\n\
+    end\n\
+    h:close()\n\
+    return 1, code, headers, status\n\
+end\n\
+\n\
+-- turns an url and a body into a generic request\n\
+local function genericform(u, b)\n\
+    local t = {}\n\
+    local reqt = {\n\
+        url = u,\n\
+        sink = ltn12.sink.table(t),\n\
+        target = t\n\
+    }\n\
+    if b then\n\
+        reqt.source = ltn12.source.string(b)\n\
+        reqt.headers = {\n\
+            [\"content-length\"] = string.len(b),\n\
+            [\"content-type\"] = \"application/x-www-form-urlencoded\"\n\
+        }\n\
+        reqt.method = \"POST\"\n\
+    end\n\
+    return reqt\n\
+end\n\
+\n\
+_M.genericform = genericform\n\
+\n\
+local function srequest(u, b)\n\
+    local reqt = genericform(u, b)\n\
+    local _, code, headers, status = trequest(reqt)\n\
+    return table.concat(reqt.target), code, headers, status\n\
+end\n\
+\n\
+_M.request = socket.protect(function(reqt, body)\n\
+    if base.type(reqt) == \"string\" then return srequest(reqt, body)\n\
+    else return trequest(reqt) end\n\
+end)\n\
+\n\
+_M.schemes = SCHEMES\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_http (lua_State *L) {
-  return luaL_loadbuffer(L,lau_http,sizeof(lau_http),"http"); }
+  return lau_loadlua(L,lau_http,sizeof(lau_http),"socket.http"); }
 
 /* luasocket-3.0.0/src/ltn12.lua */
 static const char lau_ltn12[] = "\
------------------------------------------------------------------------------\
--- LTN12 - Filters, sources, sinks and pumps.\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module\
------------------------------------------------------------------------------\
-local string = require(\"string\")\
-local table = require(\"table\")\
-local unpack = unpack or table.unpack\
-local base = _G\
-local select = select\
-\
-local _M = {}\
-if module then -- heuristic for exporting a global package table\
-    ltn12 = _M  -- luacheck: ignore\
-end\
-local filter,source,sink,pump = {},{},{},{}\
-\
-_M.filter = filter\
-_M.source = source\
-_M.sink = sink\
-_M.pump = pump\
-\
--- 2048 seems to be better in windows...\
-_M.BLOCKSIZE = 2048\
-_M._VERSION = \"LTN12 1.0.3\"\
-\
------------------------------------------------------------------------------\
--- Filter stuff\
------------------------------------------------------------------------------\
--- returns a high level filter that cycles a low-level filter\
-function filter.cycle(low, ctx, extra)\
-    base.assert(low)\
-    return function(chunk)\
-        local ret\
-        ret, ctx = low(ctx, chunk, extra)\
-        return ret\
-    end\
-end\
-\
--- chains a bunch of filters together\
--- (thanks to Wim Couwenberg)\
-function filter.chain(...)\
-    local arg = {...}\
-    local n = select('#',...)\
-    local top, index = 1, 1\
-    local retry = \"\"\
-    return function(chunk)\
-        retry = chunk and retry\
-        while true do\
-            if index == top then\
-                chunk = arg[index](chunk)\
-                if chunk == \"\" or top == n then return chunk\
-                elseif chunk then index = index + 1\
-                else\
-                    top = top+1\
-                    index = top\
-                end\
-            else\
-                chunk = arg[index](chunk or \"\")\
-                if chunk == \"\" then\
-                    index = index - 1\
-                    chunk = retry\
-                elseif chunk then\
-                    if index == n then return chunk\
-                    else index = index + 1 end\
-                else base.error(\"filter returned inappropriate nil\") end\
-            end\
-        end\
-    end\
-end\
-\
------------------------------------------------------------------------------\
--- Source stuff\
------------------------------------------------------------------------------\
--- create an empty source\
-local function empty()\
-    return nil\
-end\
-\
-function source.empty()\
-    return empty\
-end\
-\
--- returns a source that just outputs an error\
-function source.error(err)\
-    return function()\
-        return nil, err\
-    end\
-end\
-\
--- creates a file source\
-function source.file(handle, io_err)\
-    if handle then\
-        return function()\
-            local chunk = handle:read(_M.BLOCKSIZE)\
-            if not chunk then handle:close() end\
-            return chunk\
-        end\
-    else return source.error(io_err or \"unable to open file\") end\
-end\
-\
--- turns a fancy source into a simple source\
-function source.simplify(src)\
-    base.assert(src)\
-    return function()\
-        local chunk, err_or_new = src()\
-        src = err_or_new or src\
-        if not chunk then return nil, err_or_new\
-        else return chunk end\
-    end\
-end\
-\
--- creates string source\
-function source.string(s)\
-    if s then\
-        local i = 1\
-        return function()\
-            local chunk = string.sub(s, i, i+_M.BLOCKSIZE-1)\
-            i = i + _M.BLOCKSIZE\
-            if chunk ~= \"\" then return chunk\
-            else return nil end\
-        end\
-    else return source.empty() end\
-end\
-\
--- creates table source\
-function source.table(t)\
-    base.assert('table' == type(t))\
-    local i = 0\
-    return function()\
-        i = i + 1\
-        return t[i]\
-    end\
-end\
-\
--- creates rewindable source\
-function source.rewind(src)\
-    base.assert(src)\
-    local t = {}\
-    return function(chunk)\
-        if not chunk then\
-            chunk = table.remove(t)\
-            if not chunk then return src()\
-            else return chunk end\
-        else\
-            table.insert(t, chunk)\
-        end\
-    end\
-end\
-\
--- chains a source with one or several filter(s)\
-function source.chain(src, f, ...)\
-    if ... then f=filter.chain(f, ...) end\
-    base.assert(src and f)\
-    local last_in, last_out = \"\", \"\"\
-    local state = \"feeding\"\
-    local err\
-    return function()\
-        if not last_out then\
-            base.error('source is empty!', 2)\
-        end\
-        while true do\
-            if state == \"feeding\" then\
-                last_in, err = src()\
-                if err then return nil, err end\
-                last_out = f(last_in)\
-                if not last_out then\
-                    if last_in then\
-                        base.error('filter returned inappropriate nil')\
-                    else\
-                        return nil\
-                    end\
-                elseif last_out ~= \"\" then\
-                    state = \"eating\"\
-                    if last_in then last_in = \"\" end\
-                    return last_out\
-                end\
-            else\
-                last_out = f(last_in)\
-                if last_out == \"\" then\
-                    if last_in == \"\" then\
-                        state = \"feeding\"\
-                    else\
-                        base.error('filter returned \"\"')\
-                    end\
-                elseif not last_out then\
-                    if last_in then\
-                        base.error('filter returned inappropriate nil')\
-                    else\
-                        return nil\
-                    end\
-                else\
-                    return last_out\
-                end\
-            end\
-        end\
-    end\
-end\
-\
--- creates a source that produces contents of several sources, one after the\
--- other, as if they were concatenated\
--- (thanks to Wim Couwenberg)\
-function source.cat(...)\
-    local arg = {...}\
-    local src = table.remove(arg, 1)\
-    return function()\
-        while src do\
-            local chunk, err = src()\
-            if chunk then return chunk end\
-            if err then return nil, err end\
-            src = table.remove(arg, 1)\
-        end\
-    end\
-end\
-\
------------------------------------------------------------------------------\
--- Sink stuff\
------------------------------------------------------------------------------\
--- creates a sink that stores into a table\
-function sink.table(t)\
-    t = t or {}\
-    local f = function(chunk, err)\
-        if chunk then table.insert(t, chunk) end\
-        return 1\
-    end\
-    return f, t\
-end\
-\
--- turns a fancy sink into a simple sink\
-function sink.simplify(snk)\
-    base.assert(snk)\
-    return function(chunk, err)\
-        local ret, err_or_new = snk(chunk, err)\
-        if not ret then return nil, err_or_new end\
-        snk = err_or_new or snk\
-        return 1\
-    end\
-end\
-\
--- creates a file sink\
-function sink.file(handle, io_err)\
-    if handle then\
-        return function(chunk, err)\
-            if not chunk then\
-                handle:close()\
-                return 1\
-            else return handle:write(chunk) end\
-        end\
-    else return sink.error(io_err or \"unable to open file\") end\
-end\
-\
--- creates a sink that discards data\
-local function null()\
-    return 1\
-end\
-\
-function sink.null()\
-    return null\
-end\
-\
--- creates a sink that just returns an error\
-function sink.error(err)\
-    return function()\
-        return nil, err\
-    end\
-end\
-\
--- chains a sink with one or several filter(s)\
-function sink.chain(f, snk, ...)\
-    if ... then\
-        local args = { f, snk, ... }\
-        snk = table.remove(args, #args)\
-        f = filter.chain(unpack(args))\
-    end\
-    base.assert(f and snk)\
-    return function(chunk, err)\
-        if chunk ~= \"\" then\
-            local filtered = f(chunk)\
-            local done = chunk and \"\"\
-            while true do\
-                local ret, snkerr = snk(filtered, err)\
-                if not ret then return nil, snkerr end\
-                if filtered == done then return 1 end\
-                filtered = f(done)\
-            end\
-        else return 1 end\
-    end\
-end\
-\
------------------------------------------------------------------------------\
--- Pump stuff\
------------------------------------------------------------------------------\
--- pumps one chunk from the source to the sink\
-function pump.step(src, snk)\
-    local chunk, src_err = src()\
-    local ret, snk_err = snk(chunk, src_err)\
-    if chunk and ret then return 1\
-    else return nil, src_err or snk_err end\
-end\
-\
--- pumps all data from a source to a sink, using a step function\
-function pump.all(src, snk, step)\
-    base.assert(src and snk)\
-    step = step or pump.step\
-    while true do\
-        local ret, err = step(src, snk)\
-        if not ret then\
-            if err then return nil, err\
-            else return 1 end\
-        end\
-    end\
-end\
-\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- LTN12 - Filters, sources, sinks and pumps.\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module\n\
+-----------------------------------------------------------------------------\n\
+local string = require(\"string\")\n\
+local table = require(\"table\")\n\
+local unpack = unpack or table.unpack\n\
+local base = _G\n\
+local select = select\n\
+\n\
+local _M = {}\n\
+if module then -- heuristic for exporting a global package table\n\
+    ltn12 = _M  -- luacheck: ignore\n\
+end\n\
+local filter,source,sink,pump = {},{},{},{}\n\
+\n\
+_M.filter = filter\n\
+_M.source = source\n\
+_M.sink = sink\n\
+_M.pump = pump\n\
+\n\
+-- 2048 seems to be better in windows...\n\
+_M.BLOCKSIZE = 2048\n\
+_M._VERSION = \"LTN12 1.0.3\"\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Filter stuff\n\
+-----------------------------------------------------------------------------\n\
+-- returns a high level filter that cycles a low-level filter\n\
+function filter.cycle(low, ctx, extra)\n\
+    base.assert(low)\n\
+    return function(chunk)\n\
+        local ret\n\
+        ret, ctx = low(ctx, chunk, extra)\n\
+        return ret\n\
+    end\n\
+end\n\
+\n\
+-- chains a bunch of filters together\n\
+-- (thanks to Wim Couwenberg)\n\
+function filter.chain(...)\n\
+    local arg = {...}\n\
+    local n = select('#',...)\n\
+    local top, index = 1, 1\n\
+    local retry = \"\"\n\
+    return function(chunk)\n\
+        retry = chunk and retry\n\
+        while true do\n\
+            if index == top then\n\
+                chunk = arg[index](chunk)\n\
+                if chunk == \"\" or top == n then return chunk\n\
+                elseif chunk then index = index + 1\n\
+                else\n\
+                    top = top+1\n\
+                    index = top\n\
+                end\n\
+            else\n\
+                chunk = arg[index](chunk or \"\")\n\
+                if chunk == \"\" then\n\
+                    index = index - 1\n\
+                    chunk = retry\n\
+                elseif chunk then\n\
+                    if index == n then return chunk\n\
+                    else index = index + 1 end\n\
+                else base.error(\"filter returned inappropriate nil\") end\n\
+            end\n\
+        end\n\
+    end\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Source stuff\n\
+-----------------------------------------------------------------------------\n\
+-- create an empty source\n\
+local function empty()\n\
+    return nil\n\
+end\n\
+\n\
+function source.empty()\n\
+    return empty\n\
+end\n\
+\n\
+-- returns a source that just outputs an error\n\
+function source.error(err)\n\
+    return function()\n\
+        return nil, err\n\
+    end\n\
+end\n\
+\n\
+-- creates a file source\n\
+function source.file(handle, io_err)\n\
+    if handle then\n\
+        return function()\n\
+            local chunk = handle:read(_M.BLOCKSIZE)\n\
+            if not chunk then handle:close() end\n\
+            return chunk\n\
+        end\n\
+    else return source.error(io_err or \"unable to open file\") end\n\
+end\n\
+\n\
+-- turns a fancy source into a simple source\n\
+function source.simplify(src)\n\
+    base.assert(src)\n\
+    return function()\n\
+        local chunk, err_or_new = src()\n\
+        src = err_or_new or src\n\
+        if not chunk then return nil, err_or_new\n\
+        else return chunk end\n\
+    end\n\
+end\n\
+\n\
+-- creates string source\n\
+function source.string(s)\n\
+    if s then\n\
+        local i = 1\n\
+        return function()\n\
+            local chunk = string.sub(s, i, i+_M.BLOCKSIZE-1)\n\
+            i = i + _M.BLOCKSIZE\n\
+            if chunk ~= \"\" then return chunk\n\
+            else return nil end\n\
+        end\n\
+    else return source.empty() end\n\
+end\n\
+\n\
+-- creates table source\n\
+function source.table(t)\n\
+    base.assert('table' == type(t))\n\
+    local i = 0\n\
+    return function()\n\
+        i = i + 1\n\
+        return t[i]\n\
+    end\n\
+end\n\
+\n\
+-- creates rewindable source\n\
+function source.rewind(src)\n\
+    base.assert(src)\n\
+    local t = {}\n\
+    return function(chunk)\n\
+        if not chunk then\n\
+            chunk = table.remove(t)\n\
+            if not chunk then return src()\n\
+            else return chunk end\n\
+        else\n\
+            table.insert(t, chunk)\n\
+        end\n\
+    end\n\
+end\n\
+\n\
+-- chains a source with one or several filter(s)\n\
+function source.chain(src, f, ...)\n\
+    if ... then f=filter.chain(f, ...) end\n\
+    base.assert(src and f)\n\
+    local last_in, last_out = \"\", \"\"\n\
+    local state = \"feeding\"\n\
+    local err\n\
+    return function()\n\
+        if not last_out then\n\
+            base.error('source is empty!', 2)\n\
+        end\n\
+        while true do\n\
+            if state == \"feeding\" then\n\
+                last_in, err = src()\n\
+                if err then return nil, err end\n\
+                last_out = f(last_in)\n\
+                if not last_out then\n\
+                    if last_in then\n\
+                        base.error('filter returned inappropriate nil')\n\
+                    else\n\
+                        return nil\n\
+                    end\n\
+                elseif last_out ~= \"\" then\n\
+                    state = \"eating\"\n\
+                    if last_in then last_in = \"\" end\n\
+                    return last_out\n\
+                end\n\
+            else\n\
+                last_out = f(last_in)\n\
+                if last_out == \"\" then\n\
+                    if last_in == \"\" then\n\
+                        state = \"feeding\"\n\
+                    else\n\
+                        base.error('filter returned \"\"')\n\
+                    end\n\
+                elseif not last_out then\n\
+                    if last_in then\n\
+                        base.error('filter returned inappropriate nil')\n\
+                    else\n\
+                        return nil\n\
+                    end\n\
+                else\n\
+                    return last_out\n\
+                end\n\
+            end\n\
+        end\n\
+    end\n\
+end\n\
+\n\
+-- creates a source that produces contents of several sources, one after the\n\
+-- other, as if they were concatenated\n\
+-- (thanks to Wim Couwenberg)\n\
+function source.cat(...)\n\
+    local arg = {...}\n\
+    local src = table.remove(arg, 1)\n\
+    return function()\n\
+        while src do\n\
+            local chunk, err = src()\n\
+            if chunk then return chunk end\n\
+            if err then return nil, err end\n\
+            src = table.remove(arg, 1)\n\
+        end\n\
+    end\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Sink stuff\n\
+-----------------------------------------------------------------------------\n\
+-- creates a sink that stores into a table\n\
+function sink.table(t)\n\
+    t = t or {}\n\
+    local f = function(chunk, err)\n\
+        if chunk then table.insert(t, chunk) end\n\
+        return 1\n\
+    end\n\
+    return f, t\n\
+end\n\
+\n\
+-- turns a fancy sink into a simple sink\n\
+function sink.simplify(snk)\n\
+    base.assert(snk)\n\
+    return function(chunk, err)\n\
+        local ret, err_or_new = snk(chunk, err)\n\
+        if not ret then return nil, err_or_new end\n\
+        snk = err_or_new or snk\n\
+        return 1\n\
+    end\n\
+end\n\
+\n\
+-- creates a file sink\n\
+function sink.file(handle, io_err)\n\
+    if handle then\n\
+        return function(chunk, err)\n\
+            if not chunk then\n\
+                handle:close()\n\
+                return 1\n\
+            else return handle:write(chunk) end\n\
+        end\n\
+    else return sink.error(io_err or \"unable to open file\") end\n\
+end\n\
+\n\
+-- creates a sink that discards data\n\
+local function null()\n\
+    return 1\n\
+end\n\
+\n\
+function sink.null()\n\
+    return null\n\
+end\n\
+\n\
+-- creates a sink that just returns an error\n\
+function sink.error(err)\n\
+    return function()\n\
+        return nil, err\n\
+    end\n\
+end\n\
+\n\
+-- chains a sink with one or several filter(s)\n\
+function sink.chain(f, snk, ...)\n\
+    if ... then\n\
+        local args = { f, snk, ... }\n\
+        snk = table.remove(args, #args)\n\
+        f = filter.chain(unpack(args))\n\
+    end\n\
+    base.assert(f and snk)\n\
+    return function(chunk, err)\n\
+        if chunk ~= \"\" then\n\
+            local filtered = f(chunk)\n\
+            local done = chunk and \"\"\n\
+            while true do\n\
+                local ret, snkerr = snk(filtered, err)\n\
+                if not ret then return nil, snkerr end\n\
+                if filtered == done then return 1 end\n\
+                filtered = f(done)\n\
+            end\n\
+        else return 1 end\n\
+    end\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Pump stuff\n\
+-----------------------------------------------------------------------------\n\
+-- pumps one chunk from the source to the sink\n\
+function pump.step(src, snk)\n\
+    local chunk, src_err = src()\n\
+    local ret, snk_err = snk(chunk, src_err)\n\
+    if chunk and ret then return 1\n\
+    else return nil, src_err or snk_err end\n\
+end\n\
+\n\
+-- pumps all data from a source to a sink, using a step function\n\
+function pump.all(src, snk, step)\n\
+    base.assert(src and snk)\n\
+    step = step or pump.step\n\
+    while true do\n\
+        local ret, err = step(src, snk)\n\
+        if not ret then\n\
+            if err then return nil, err\n\
+            else return 1 end\n\
+        end\n\
+    end\n\
+end\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_ltn12 (lua_State *L) {
-  return luaL_loadbuffer(L,lau_ltn12,sizeof(lau_ltn12),"ltn12"); }
+  return lau_loadlua(L,lau_ltn12,sizeof(lau_ltn12),"ltn12"); }
 
 /* luasocket-3.0.0/src/mbox.lua */
 static const char lau_mbox[] = "\
-local _M = {}\
-\
-if module then\
-    mbox = _M   -- luacheck: ignore\
-end\
-\
-function _M.split_message(message_s)\
-    local message = {}\
-    message_s = string.gsub(message_s, \"\\r\\n\", \"\\n\")\
-    string.gsub(message_s, \"^(.-\\n)\\n\", function (h) message.headers = h end)\
-    string.gsub(message_s, \"^.-\\n\\n(.*)\", function (b) message.body = b end)\
-    if not message.body then\
-        string.gsub(message_s, \"^\\n(.*)\", function (b) message.body = b end)\
-    end\
-    if not message.headers and not message.body then\
-        message.headers = message_s\
-    end\
-    return message.headers or \"\", message.body or \"\"\
-end\
-\
-function _M.split_headers(headers_s)\
-    local headers = {}\
-    headers_s = string.gsub(headers_s, \"\\r\\n\", \"\\n\")\
-    headers_s = string.gsub(headers_s, \"\\n[ ]+\", \" \")\
-    string.gsub(\"\\n\" .. headers_s, \"\\n([^\\n]+)\", function (h) table.insert(headers, h) end)\
-    return headers\
-end\
-\
-function _M.parse_header(header_s)\
-    header_s = string.gsub(header_s, \"\\n[ ]+\", \" \")\
-    header_s = string.gsub(header_s, \"\\n+\", \"\")\
-    local _, _, name, value = string.find(header_s, \"([^%s:]-):%s*(.*)\")\
-    return name, value\
-end\
-\
-function _M.parse_headers(headers_s)\
-    local headers_t = _M.split_headers(headers_s)\
-    local headers = {}\
-    for i = 1, #headers_t do\
-        local name, value = _M.parse_header(headers_t[i])\
-        if name then\
-            name = string.lower(name)\
-            if headers[name] then\
-                headers[name] = headers[name] .. \", \" .. value\
-            else headers[name] = value end\
-        end\
-    end\
-    return headers\
-end\
-\
-function _M.parse_from(from)\
-    local _, _, name, address = string.find(from, \"^%s*(.-)%s*%<(.-)%>\")\
-    if not address then\
-        _, _, address = string.find(from, \"%s*(.+)%s*\")\
-    end\
-    name = name or \"\"\
-    address = address or \"\"\
-    if name == \"\" then name = address end\
-    name = string.gsub(name, '\"', \"\")\
-    return name, address\
-end\
-\
-function _M.split_mbox(mbox_s)\
-    local mbox = {}\
-    mbox_s = string.gsub(mbox_s, \"\\r\\n\", \"\\n\") ..\"\\n\\nFrom \\n\"\
-    local nj, i\
-    local j = 1\
-    while 1 do\
-        i, nj = string.find(mbox_s, \"\\n\\nFrom .-\\n\", j)\
-        if not i then break end\
-        local message = string.sub(mbox_s, j, i-1)\
-        table.insert(mbox, message)\
-        j = nj+1\
-    end\
-    return mbox\
-end\
-\
-function _M.parse(mbox_s)\
-    local mbox = _M.split_mbox(mbox_s)\
-    for i = 1, #mbox do\
-        mbox[i] = _M.parse_message(mbox[i])\
-    end\
-    return mbox\
-end\
-\
-function _M.parse_message(message_s)\
-    local message = {}\
-    message.headers, message.body = _M.split_message(message_s)\
-    message.headers = _M.parse_headers(message.headers)\
-    return message\
-end\
-\
-return _M\
-\
+local _M = {}\n\
+\n\
+if module then\n\
+    mbox = _M   -- luacheck: ignore\n\
+end\n\
+\n\
+function _M.split_message(message_s)\n\
+    local message = {}\n\
+    message_s = string.gsub(message_s, \"\\r\\n\", \"\\n\")\n\
+    string.gsub(message_s, \"^(.-\\n)\\n\", function (h) message.headers = h end)\n\
+    string.gsub(message_s, \"^.-\\n\\n(.*)\", function (b) message.body = b end)\n\
+    if not message.body then\n\
+        string.gsub(message_s, \"^\\n(.*)\", function (b) message.body = b end)\n\
+    end\n\
+    if not message.headers and not message.body then\n\
+        message.headers = message_s\n\
+    end\n\
+    return message.headers or \"\", message.body or \"\"\n\
+end\n\
+\n\
+function _M.split_headers(headers_s)\n\
+    local headers = {}\n\
+    headers_s = string.gsub(headers_s, \"\\r\\n\", \"\\n\")\n\
+    headers_s = string.gsub(headers_s, \"\\n[ ]+\", \" \")\n\
+    string.gsub(\"\\n\" .. headers_s, \"\\n([^\\n]+)\", function (h) table.insert(headers, h) end)\n\
+    return headers\n\
+end\n\
+\n\
+function _M.parse_header(header_s)\n\
+    header_s = string.gsub(header_s, \"\\n[ ]+\", \" \")\n\
+    header_s = string.gsub(header_s, \"\\n+\", \"\")\n\
+    local _, _, name, value = string.find(header_s, \"([^%s:]-):%s*(.*)\")\n\
+    return name, value\n\
+end\n\
+\n\
+function _M.parse_headers(headers_s)\n\
+    local headers_t = _M.split_headers(headers_s)\n\
+    local headers = {}\n\
+    for i = 1, #headers_t do\n\
+        local name, value = _M.parse_header(headers_t[i])\n\
+        if name then\n\
+            name = string.lower(name)\n\
+            if headers[name] then\n\
+                headers[name] = headers[name] .. \", \" .. value\n\
+            else headers[name] = value end\n\
+        end\n\
+    end\n\
+    return headers\n\
+end\n\
+\n\
+function _M.parse_from(from)\n\
+    local _, _, name, address = string.find(from, \"^%s*(.-)%s*%<(.-)%>\")\n\
+    if not address then\n\
+        _, _, address = string.find(from, \"%s*(.+)%s*\")\n\
+    end\n\
+    name = name or \"\"\n\
+    address = address or \"\"\n\
+    if name == \"\" then name = address end\n\
+    name = string.gsub(name, '\"', \"\")\n\
+    return name, address\n\
+end\n\
+\n\
+function _M.split_mbox(mbox_s)\n\
+    local mbox = {}\n\
+    mbox_s = string.gsub(mbox_s, \"\\r\\n\", \"\\n\") ..\"\\n\\nFrom \\n\"\n\
+    local nj, i\n\
+    local j = 1\n\
+    while 1 do\n\
+        i, nj = string.find(mbox_s, \"\\n\\nFrom .-\\n\", j)\n\
+        if not i then break end\n\
+        local message = string.sub(mbox_s, j, i-1)\n\
+        table.insert(mbox, message)\n\
+        j = nj+1\n\
+    end\n\
+    return mbox\n\
+end\n\
+\n\
+function _M.parse(mbox_s)\n\
+    local mbox = _M.split_mbox(mbox_s)\n\
+    for i = 1, #mbox do\n\
+        mbox[i] = _M.parse_message(mbox[i])\n\
+    end\n\
+    return mbox\n\
+end\n\
+\n\
+function _M.parse_message(message_s)\n\
+    local message = {}\n\
+    message.headers, message.body = _M.split_message(message_s)\n\
+    message.headers = _M.parse_headers(message.headers)\n\
+    return message\n\
+end\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_mbox (lua_State *L) {
-  return luaL_loadbuffer(L,lau_mbox,sizeof(lau_mbox),"mbox"); }
+  return lau_loadlua(L,lau_mbox,sizeof(lau_mbox),"mbox"); }
 
 /* luasocket-3.0.0/src/mime.lua */
 static const char lau_mime[] = "\
------------------------------------------------------------------------------\
--- MIME support for the Lua language.\
--- Author: Diego Nehab\
--- Conforming to RFCs 2045-2049\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module and import dependencies\
------------------------------------------------------------------------------\
-local base = _G\
-local ltn12 = require(\"ltn12\")\
-local mime = require(\"mime.core\")\
-local _M = mime\
-\
--- encode, decode and wrap algorithm tables\
-local encodet, decodet, wrapt = {},{},{}\
-\
-_M.encodet = encodet\
-_M.decodet = decodet\
-_M.wrapt   = wrapt\
-\
--- creates a function that chooses a filter by name from a given table\
-local function choose(table)\
-    return function(name, opt1, opt2)\
-        if base.type(name) ~= \"string\" then\
-            name, opt1, opt2 = \"default\", name, opt1\
-        end\
-        local f = table[name or \"nil\"]\
-        if not f then\
-            base.error(\"unknown key (\" .. base.tostring(name) .. \")\", 3)\
-        else return f(opt1, opt2) end\
-    end\
-end\
-\
--- define the encoding filters\
-encodet['base64'] = function()\
-    return ltn12.filter.cycle(_M.b64, \"\")\
-end\
-\
-encodet['quoted-printable'] = function(mode)\
-    return ltn12.filter.cycle(_M.qp, \"\",\
-        (mode == \"binary\") and \"=0D=0A\" or \"\\r\\n\")\
-end\
-\
--- define the decoding filters\
-decodet['base64'] = function()\
-    return ltn12.filter.cycle(_M.unb64, \"\")\
-end\
-\
-decodet['quoted-printable'] = function()\
-    return ltn12.filter.cycle(_M.unqp, \"\")\
-end\
-\
--- define the line-wrap filters\
-wrapt['text'] = function(length)\
-    length = length or 76\
-    return ltn12.filter.cycle(_M.wrp, length, length)\
-end\
-wrapt['base64'] = wrapt['text']\
-wrapt['default'] = wrapt['text']\
-\
-wrapt['quoted-printable'] = function()\
-    return ltn12.filter.cycle(_M.qpwrp, 76, 76)\
-end\
-\
--- function that choose the encoding, decoding or wrap algorithm\
-_M.encode = choose(encodet)\
-_M.decode = choose(decodet)\
-_M.wrap = choose(wrapt)\
-\
--- define the end-of-line normalization filter\
-function _M.normalize(marker)\
-    return ltn12.filter.cycle(_M.eol, 0, marker)\
-end\
-\
--- high level stuffing filter\
-function _M.stuff()\
-    return ltn12.filter.cycle(_M.dot, 2)\
-end\
-\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- MIME support for the Lua language.\n\
+-- Author: Diego Nehab\n\
+-- Conforming to RFCs 2045-2049\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module and import dependencies\n\
+-----------------------------------------------------------------------------\n\
+local base = _G\n\
+local ltn12 = require(\"ltn12\")\n\
+local mime = require(\"mime.core\")\n\
+local _M = mime\n\
+\n\
+-- encode, decode and wrap algorithm tables\n\
+local encodet, decodet, wrapt = {},{},{}\n\
+\n\
+_M.encodet = encodet\n\
+_M.decodet = decodet\n\
+_M.wrapt   = wrapt\n\
+\n\
+-- creates a function that chooses a filter by name from a given table\n\
+local function choose(table)\n\
+    return function(name, opt1, opt2)\n\
+        if base.type(name) ~= \"string\" then\n\
+            name, opt1, opt2 = \"default\", name, opt1\n\
+        end\n\
+        local f = table[name or \"nil\"]\n\
+        if not f then\n\
+            base.error(\"unknown key (\" .. base.tostring(name) .. \")\", 3)\n\
+        else return f(opt1, opt2) end\n\
+    end\n\
+end\n\
+\n\
+-- define the encoding filters\n\
+encodet['base64'] = function()\n\
+    return ltn12.filter.cycle(_M.b64, \"\")\n\
+end\n\
+\n\
+encodet['quoted-printable'] = function(mode)\n\
+    return ltn12.filter.cycle(_M.qp, \"\",\n\
+        (mode == \"binary\") and \"=0D=0A\" or \"\\r\\n\")\n\
+end\n\
+\n\
+-- define the decoding filters\n\
+decodet['base64'] = function()\n\
+    return ltn12.filter.cycle(_M.unb64, \"\")\n\
+end\n\
+\n\
+decodet['quoted-printable'] = function()\n\
+    return ltn12.filter.cycle(_M.unqp, \"\")\n\
+end\n\
+\n\
+-- define the line-wrap filters\n\
+wrapt['text'] = function(length)\n\
+    length = length or 76\n\
+    return ltn12.filter.cycle(_M.wrp, length, length)\n\
+end\n\
+wrapt['base64'] = wrapt['text']\n\
+wrapt['default'] = wrapt['text']\n\
+\n\
+wrapt['quoted-printable'] = function()\n\
+    return ltn12.filter.cycle(_M.qpwrp, 76, 76)\n\
+end\n\
+\n\
+-- function that choose the encoding, decoding or wrap algorithm\n\
+_M.encode = choose(encodet)\n\
+_M.decode = choose(decodet)\n\
+_M.wrap = choose(wrapt)\n\
+\n\
+-- define the end-of-line normalization filter\n\
+function _M.normalize(marker)\n\
+    return ltn12.filter.cycle(_M.eol, 0, marker)\n\
+end\n\
+\n\
+-- high level stuffing filter\n\
+function _M.stuff()\n\
+    return ltn12.filter.cycle(_M.dot, 2)\n\
+end\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_mime (lua_State *L) {
-  return luaL_loadbuffer(L,lau_mime,sizeof(lau_mime),"mime"); }
+  return lau_loadlua(L,lau_mime,sizeof(lau_mime),"mime"); }
 
 /* luasocket-3.0.0/src/smtp.lua */
 static const char lau_smtp[] = "\
------------------------------------------------------------------------------\
--- SMTP client support for the Lua language.\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module and import dependencies\
------------------------------------------------------------------------------\
-local base = _G\
-local coroutine = require(\"coroutine\")\
-local string = require(\"string\")\
-local math = require(\"math\")\
-local os = require(\"os\")\
-local socket = require(\"socket\")\
-local tp = require(\"socket.tp\")\
-local ltn12 = require(\"ltn12\")\
-local headers = require(\"socket.headers\")\
-local mime = require(\"mime\")\
-\
-socket.smtp = {}\
-local _M = socket.smtp\
-\
------------------------------------------------------------------------------\
--- Program constants\
------------------------------------------------------------------------------\
--- timeout for connection\
-_M.TIMEOUT = 60\
--- default server used to send e-mails\
-_M.SERVER = \"localhost\"\
--- default port\
-_M.PORT = 25\
--- domain used in HELO command and default sendmail\
--- If we are under a CGI, try to get from environment\
-_M.DOMAIN = os.getenv(\"SERVER_NAME\") or \"localhost\"\
--- default time zone (means we don't know)\
-_M.ZONE = \"-0000\"\
-\
----------------------------------------------------------------------------\
--- Low level SMTP API\
------------------------------------------------------------------------------\
-local metat = { __index = {} }\
-\
-function metat.__index:greet(domain)\
-    self.try(self.tp:check(\"2..\"))\
-    self.try(self.tp:command(\"EHLO\", domain or _M.DOMAIN))\
-    return socket.skip(1, self.try(self.tp:check(\"2..\")))\
-end\
-\
-function metat.__index:mail(from)\
-    self.try(self.tp:command(\"MAIL\", \"FROM:\" .. from))\
-    return self.try(self.tp:check(\"2..\"))\
-end\
-\
-function metat.__index:rcpt(to)\
-    self.try(self.tp:command(\"RCPT\", \"TO:\" .. to))\
-    return self.try(self.tp:check(\"2..\"))\
-end\
-\
-function metat.__index:data(src, step)\
-    self.try(self.tp:command(\"DATA\"))\
-    self.try(self.tp:check(\"3..\"))\
-    self.try(self.tp:source(src, step))\
-    self.try(self.tp:send(\"\\r\\n.\\r\\n\"))\
-    return self.try(self.tp:check(\"2..\"))\
-end\
-\
-function metat.__index:quit()\
-    self.try(self.tp:command(\"QUIT\"))\
-    return self.try(self.tp:check(\"2..\"))\
-end\
-\
-function metat.__index:close()\
-    return self.tp:close()\
-end\
-\
-function metat.__index:login(user, password)\
-    self.try(self.tp:command(\"AUTH\", \"LOGIN\"))\
-    self.try(self.tp:check(\"3..\"))\
-    self.try(self.tp:send(mime.b64(user) .. \"\\r\\n\"))\
-    self.try(self.tp:check(\"3..\"))\
-    self.try(self.tp:send(mime.b64(password) .. \"\\r\\n\"))\
-    return self.try(self.tp:check(\"2..\"))\
-end\
-\
-function metat.__index:plain(user, password)\
-    local auth = \"PLAIN \" .. mime.b64(\"\\0\" .. user .. \"\\0\" .. password)\
-    self.try(self.tp:command(\"AUTH\", auth))\
-    return self.try(self.tp:check(\"2..\"))\
-end\
-\
-function metat.__index:auth(user, password, ext)\
-    if not user or not password then return 1 end\
-    if string.find(ext, \"AUTH[^\\n]+LOGIN\") then\
-        return self:login(user, password)\
-    elseif string.find(ext, \"AUTH[^\\n]+PLAIN\") then\
-        return self:plain(user, password)\
-    else\
-        self.try(nil, \"authentication not supported\")\
-    end\
-end\
-\
--- send message or throw an exception\
-function metat.__index:send(mailt)\
-    self:mail(mailt.from)\
-    if base.type(mailt.rcpt) == \"table\" then\
-        for i,v in base.ipairs(mailt.rcpt) do\
-            self:rcpt(v)\
-        end\
-    else\
-        self:rcpt(mailt.rcpt)\
-    end\
-    self:data(ltn12.source.chain(mailt.source, mime.stuff()), mailt.step)\
-end\
-\
-function _M.open(server, port, create)\
-    local tp = socket.try(tp.connect(server or _M.SERVER, port or _M.PORT,\
-        _M.TIMEOUT, create))\
-    local s = base.setmetatable({tp = tp}, metat)\
-    -- make sure tp is closed if we get an exception\
-    s.try = socket.newtry(function()\
-        s:close()\
-    end)\
-    return s\
-end\
-\
--- convert headers to lowercase\
-local function lower_headers(headers)\
-    local lower = {}\
-    for i,v in base.pairs(headers or lower) do\
-        lower[string.lower(i)] = v\
-    end\
-    return lower\
-end\
-\
----------------------------------------------------------------------------\
--- Multipart message source\
------------------------------------------------------------------------------\
--- returns a hopefully unique mime boundary\
-local seqno = 0\
-local function newboundary()\
-    seqno = seqno + 1\
-    return string.format('%s%05d==%05u', os.date('%d%m%Y%H%M%S'),\
-        math.random(0, 99999), seqno)\
-end\
-\
--- send_message forward declaration\
-local send_message\
-\
--- yield the headers all at once, it's faster\
-local function send_headers(tosend)\
-    local canonic = headers.canonic\
-    local h = \"\\r\\n\"\
-    for f,v in base.pairs(tosend) do\
-        h = (canonic[f] or f) .. ': ' .. v .. \"\\r\\n\" .. h\
-    end\
-    coroutine.yield(h)\
-end\
-\
--- yield multipart message body from a multipart message table\
-local function send_multipart(mesgt)\
-    -- make sure we have our boundary and send headers\
-    local bd = newboundary()\
-    local headers = lower_headers(mesgt.headers or {})\
-    headers['content-type'] = headers['content-type'] or 'multipart/mixed'\
-    headers['content-type'] = headers['content-type'] ..\
-        '; boundary=\"' ..  bd .. '\"'\
-    send_headers(headers)\
-    -- send preamble\
-    if mesgt.body.preamble then\
-        coroutine.yield(mesgt.body.preamble)\
-        coroutine.yield(\"\\r\\n\")\
-    end\
-    -- send each part separated by a boundary\
-    for i, m in base.ipairs(mesgt.body) do\
-        coroutine.yield(\"\\r\\n--\" .. bd .. \"\\r\\n\")\
-        send_message(m)\
-    end\
-    -- send last boundary\
-    coroutine.yield(\"\\r\\n--\" .. bd .. \"--\\r\\n\\r\\n\")\
-    -- send epilogue\
-    if mesgt.body.epilogue then\
-        coroutine.yield(mesgt.body.epilogue)\
-        coroutine.yield(\"\\r\\n\")\
-    end\
-end\
-\
--- yield message body from a source\
-local function send_source(mesgt)\
-    -- make sure we have a content-type\
-    local headers = lower_headers(mesgt.headers or {})\
-    headers['content-type'] = headers['content-type'] or\
-        'text/plain; charset=\"iso-8859-1\"'\
-    send_headers(headers)\
-    -- send body from source\
-    while true do\
-        local chunk, err = mesgt.body()\
-        if err then coroutine.yield(nil, err)\
-        elseif chunk then coroutine.yield(chunk)\
-        else break end\
-    end\
-end\
-\
--- yield message body from a string\
-local function send_string(mesgt)\
-    -- make sure we have a content-type\
-    local headers = lower_headers(mesgt.headers or {})\
-    headers['content-type'] = headers['content-type'] or\
-        'text/plain; charset=\"iso-8859-1\"'\
-    send_headers(headers)\
-    -- send body from string\
-    coroutine.yield(mesgt.body)\
-end\
-\
--- message source\
-function send_message(mesgt)\
-    if base.type(mesgt.body) == \"table\" then send_multipart(mesgt)\
-    elseif base.type(mesgt.body) == \"function\" then send_source(mesgt)\
-    else send_string(mesgt) end\
-end\
-\
--- set defaul headers\
-local function adjust_headers(mesgt)\
-    local lower = lower_headers(mesgt.headers)\
-    lower[\"date\"] = lower[\"date\"] or\
-        os.date(\"!%a, %d %b %Y %H:%M:%S \") .. (mesgt.zone or _M.ZONE)\
-    lower[\"x-mailer\"] = lower[\"x-mailer\"] or socket._VERSION\
-    -- this can't be overriden\
-    lower[\"mime-version\"] = \"1.0\"\
-    return lower\
-end\
-\
-function _M.message(mesgt)\
-    mesgt.headers = adjust_headers(mesgt)\
-    -- create and return message source\
-    local co = coroutine.create(function() send_message(mesgt) end)\
-    return function()\
-        local ret, a, b = coroutine.resume(co)\
-        if ret then return a, b\
-        else return nil, a end\
-    end\
-end\
-\
----------------------------------------------------------------------------\
--- High level SMTP API\
------------------------------------------------------------------------------\
-_M.send = socket.protect(function(mailt)\
-    local s = _M.open(mailt.server, mailt.port, mailt.create)\
-    local ext = s:greet(mailt.domain)\
-    s:auth(mailt.user, mailt.password, ext)\
-    s:send(mailt)\
-    s:quit()\
-    return s:close()\
-end)\
-\
-return _M\
+-----------------------------------------------------------------------------\n\
+-- SMTP client support for the Lua language.\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module and import dependencies\n\
+-----------------------------------------------------------------------------\n\
+local base = _G\n\
+local coroutine = require(\"coroutine\")\n\
+local string = require(\"string\")\n\
+local math = require(\"math\")\n\
+local os = require(\"os\")\n\
+local socket = require(\"socket\")\n\
+local tp = require(\"socket.tp\")\n\
+local ltn12 = require(\"ltn12\")\n\
+local headers = require(\"socket.headers\")\n\
+local mime = require(\"mime\")\n\
+\n\
+socket.smtp = {}\n\
+local _M = socket.smtp\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Program constants\n\
+-----------------------------------------------------------------------------\n\
+-- timeout for connection\n\
+_M.TIMEOUT = 60\n\
+-- default server used to send e-mails\n\
+_M.SERVER = \"localhost\"\n\
+-- default port\n\
+_M.PORT = 25\n\
+-- domain used in HELO command and default sendmail\n\
+-- If we are under a CGI, try to get from environment\n\
+_M.DOMAIN = os.getenv(\"SERVER_NAME\") or \"localhost\"\n\
+-- default time zone (means we don't know)\n\
+_M.ZONE = \"-0000\"\n\
+\n\
+---------------------------------------------------------------------------\n\
+-- Low level SMTP API\n\
+-----------------------------------------------------------------------------\n\
+local metat = { __index = {} }\n\
+\n\
+function metat.__index:greet(domain)\n\
+    self.try(self.tp:check(\"2..\"))\n\
+    self.try(self.tp:command(\"EHLO\", domain or _M.DOMAIN))\n\
+    return socket.skip(1, self.try(self.tp:check(\"2..\")))\n\
+end\n\
+\n\
+function metat.__index:mail(from)\n\
+    self.try(self.tp:command(\"MAIL\", \"FROM:\" .. from))\n\
+    return self.try(self.tp:check(\"2..\"))\n\
+end\n\
+\n\
+function metat.__index:rcpt(to)\n\
+    self.try(self.tp:command(\"RCPT\", \"TO:\" .. to))\n\
+    return self.try(self.tp:check(\"2..\"))\n\
+end\n\
+\n\
+function metat.__index:data(src, step)\n\
+    self.try(self.tp:command(\"DATA\"))\n\
+    self.try(self.tp:check(\"3..\"))\n\
+    self.try(self.tp:source(src, step))\n\
+    self.try(self.tp:send(\"\\r\\n.\\r\\n\"))\n\
+    return self.try(self.tp:check(\"2..\"))\n\
+end\n\
+\n\
+function metat.__index:quit()\n\
+    self.try(self.tp:command(\"QUIT\"))\n\
+    return self.try(self.tp:check(\"2..\"))\n\
+end\n\
+\n\
+function metat.__index:close()\n\
+    return self.tp:close()\n\
+end\n\
+\n\
+function metat.__index:login(user, password)\n\
+    self.try(self.tp:command(\"AUTH\", \"LOGIN\"))\n\
+    self.try(self.tp:check(\"3..\"))\n\
+    self.try(self.tp:send(mime.b64(user) .. \"\\r\\n\"))\n\
+    self.try(self.tp:check(\"3..\"))\n\
+    self.try(self.tp:send(mime.b64(password) .. \"\\r\\n\"))\n\
+    return self.try(self.tp:check(\"2..\"))\n\
+end\n\
+\n\
+function metat.__index:plain(user, password)\n\
+    local auth = \"PLAIN \" .. mime.b64(\"\\0\" .. user .. \"\\0\" .. password)\n\
+    self.try(self.tp:command(\"AUTH\", auth))\n\
+    return self.try(self.tp:check(\"2..\"))\n\
+end\n\
+\n\
+function metat.__index:auth(user, password, ext)\n\
+    if not user or not password then return 1 end\n\
+    if string.find(ext, \"AUTH[^\\n]+LOGIN\") then\n\
+        return self:login(user, password)\n\
+    elseif string.find(ext, \"AUTH[^\\n]+PLAIN\") then\n\
+        return self:plain(user, password)\n\
+    else\n\
+        self.try(nil, \"authentication not supported\")\n\
+    end\n\
+end\n\
+\n\
+-- send message or throw an exception\n\
+function metat.__index:send(mailt)\n\
+    self:mail(mailt.from)\n\
+    if base.type(mailt.rcpt) == \"table\" then\n\
+        for i,v in base.ipairs(mailt.rcpt) do\n\
+            self:rcpt(v)\n\
+        end\n\
+    else\n\
+        self:rcpt(mailt.rcpt)\n\
+    end\n\
+    self:data(ltn12.source.chain(mailt.source, mime.stuff()), mailt.step)\n\
+end\n\
+\n\
+function _M.open(server, port, create)\n\
+    local tp = socket.try(tp.connect(server or _M.SERVER, port or _M.PORT,\n\
+        _M.TIMEOUT, create))\n\
+    local s = base.setmetatable({tp = tp}, metat)\n\
+    -- make sure tp is closed if we get an exception\n\
+    s.try = socket.newtry(function()\n\
+        s:close()\n\
+    end)\n\
+    return s\n\
+end\n\
+\n\
+-- convert headers to lowercase\n\
+local function lower_headers(headers)\n\
+    local lower = {}\n\
+    for i,v in base.pairs(headers or lower) do\n\
+        lower[string.lower(i)] = v\n\
+    end\n\
+    return lower\n\
+end\n\
+\n\
+---------------------------------------------------------------------------\n\
+-- Multipart message source\n\
+-----------------------------------------------------------------------------\n\
+-- returns a hopefully unique mime boundary\n\
+local seqno = 0\n\
+local function newboundary()\n\
+    seqno = seqno + 1\n\
+    return string.format('%s%05d==%05u', os.date('%d%m%Y%H%M%S'),\n\
+        math.random(0, 99999), seqno)\n\
+end\n\
+\n\
+-- send_message forward declaration\n\
+local send_message\n\
+\n\
+-- yield the headers all at once, it's faster\n\
+local function send_headers(tosend)\n\
+    local canonic = headers.canonic\n\
+    local h = \"\\r\\n\"\n\
+    for f,v in base.pairs(tosend) do\n\
+        h = (canonic[f] or f) .. ': ' .. v .. \"\\r\\n\" .. h\n\
+    end\n\
+    coroutine.yield(h)\n\
+end\n\
+\n\
+-- yield multipart message body from a multipart message table\n\
+local function send_multipart(mesgt)\n\
+    -- make sure we have our boundary and send headers\n\
+    local bd = newboundary()\n\
+    local headers = lower_headers(mesgt.headers or {})\n\
+    headers['content-type'] = headers['content-type'] or 'multipart/mixed'\n\
+    headers['content-type'] = headers['content-type'] ..\n\
+        '; boundary=\"' ..  bd .. '\"'\n\
+    send_headers(headers)\n\
+    -- send preamble\n\
+    if mesgt.body.preamble then\n\
+        coroutine.yield(mesgt.body.preamble)\n\
+        coroutine.yield(\"\\r\\n\")\n\
+    end\n\
+    -- send each part separated by a boundary\n\
+    for i, m in base.ipairs(mesgt.body) do\n\
+        coroutine.yield(\"\\r\\n--\" .. bd .. \"\\r\\n\")\n\
+        send_message(m)\n\
+    end\n\
+    -- send last boundary\n\
+    coroutine.yield(\"\\r\\n--\" .. bd .. \"--\\r\\n\\r\\n\")\n\
+    -- send epilogue\n\
+    if mesgt.body.epilogue then\n\
+        coroutine.yield(mesgt.body.epilogue)\n\
+        coroutine.yield(\"\\r\\n\")\n\
+    end\n\
+end\n\
+\n\
+-- yield message body from a source\n\
+local function send_source(mesgt)\n\
+    -- make sure we have a content-type\n\
+    local headers = lower_headers(mesgt.headers or {})\n\
+    headers['content-type'] = headers['content-type'] or\n\
+        'text/plain; charset=\"iso-8859-1\"'\n\
+    send_headers(headers)\n\
+    -- send body from source\n\
+    while true do\n\
+        local chunk, err = mesgt.body()\n\
+        if err then coroutine.yield(nil, err)\n\
+        elseif chunk then coroutine.yield(chunk)\n\
+        else break end\n\
+    end\n\
+end\n\
+\n\
+-- yield message body from a string\n\
+local function send_string(mesgt)\n\
+    -- make sure we have a content-type\n\
+    local headers = lower_headers(mesgt.headers or {})\n\
+    headers['content-type'] = headers['content-type'] or\n\
+        'text/plain; charset=\"iso-8859-1\"'\n\
+    send_headers(headers)\n\
+    -- send body from string\n\
+    coroutine.yield(mesgt.body)\n\
+end\n\
+\n\
+-- message source\n\
+function send_message(mesgt)\n\
+    if base.type(mesgt.body) == \"table\" then send_multipart(mesgt)\n\
+    elseif base.type(mesgt.body) == \"function\" then send_source(mesgt)\n\
+    else send_string(mesgt) end\n\
+end\n\
+\n\
+-- set defaul headers\n\
+local function adjust_headers(mesgt)\n\
+    local lower = lower_headers(mesgt.headers)\n\
+    lower[\"date\"] = lower[\"date\"] or\n\
+        os.date(\"!%a, %d %b %Y %H:%M:%S \") .. (mesgt.zone or _M.ZONE)\n\
+    lower[\"x-mailer\"] = lower[\"x-mailer\"] or socket._VERSION\n\
+    -- this can't be overriden\n\
+    lower[\"mime-version\"] = \"1.0\"\n\
+    return lower\n\
+end\n\
+\n\
+function _M.message(mesgt)\n\
+    mesgt.headers = adjust_headers(mesgt)\n\
+    -- create and return message source\n\
+    local co = coroutine.create(function() send_message(mesgt) end)\n\
+    return function()\n\
+        local ret, a, b = coroutine.resume(co)\n\
+        if ret then return a, b\n\
+        else return nil, a end\n\
+    end\n\
+end\n\
+\n\
+---------------------------------------------------------------------------\n\
+-- High level SMTP API\n\
+-----------------------------------------------------------------------------\n\
+_M.send = socket.protect(function(mailt)\n\
+    local s = _M.open(mailt.server, mailt.port, mailt.create)\n\
+    local ext = s:greet(mailt.domain)\n\
+    s:auth(mailt.user, mailt.password, ext)\n\
+    s:send(mailt)\n\
+    s:quit()\n\
+    return s:close()\n\
+end)\n\
+\n\
+return _M\n\
 ";
 LUAMOD_API int luaopen_smtp (lua_State *L) {
-  return luaL_loadbuffer(L,lau_smtp,sizeof(lau_smtp),"smtp"); }
+  return lau_loadlua(L,lau_smtp,sizeof(lau_smtp),"socket.smtp"); }
 
 /* luasocket-3.0.0/src/socket.lua */
 static const char lau_socket[] = "\
------------------------------------------------------------------------------\
--- LuaSocket helper module\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module and import dependencies\
------------------------------------------------------------------------------\
-local base = _G\
-local string = require(\"string\")\
-local math = require(\"math\")\
-local socket = require(\"socket.core\")\
-\
-local _M = socket\
-\
------------------------------------------------------------------------------\
--- Exported auxiliar functions\
------------------------------------------------------------------------------\
-function _M.connect4(address, port, laddress, lport)\
-    return socket.connect(address, port, laddress, lport, \"inet\")\
-end\
-\
-function _M.connect6(address, port, laddress, lport)\
-    return socket.connect(address, port, laddress, lport, \"inet6\")\
-end\
-\
-function _M.bind(host, port, backlog)\
-    if host == \"*\" then host = \"0.0.0.0\" end\
-    local addrinfo, err = socket.dns.getaddrinfo(host);\
-    if not addrinfo then return nil, err end\
-    local sock, res\
-    err = \"no info on address\"\
-    for i, alt in base.ipairs(addrinfo) do\
-        if alt.family == \"inet\" then\
-            sock, err = socket.tcp4()\
-        else\
-            sock, err = socket.tcp6()\
-        end\
-        if not sock then return nil, err end\
-        sock:setoption(\"reuseaddr\", true)\
-        res, err = sock:bind(alt.addr, port)\
-        if not res then\
-            sock:close()\
-        else\
-            res, err = sock:listen(backlog)\
-            if not res then\
-                sock:close()\
-            else\
-                return sock\
-            end\
-        end\
-    end\
-    return nil, err\
-end\
-\
-_M.try = _M.newtry()\
-\
-function _M.choose(table)\
-    return function(name, opt1, opt2)\
-        if base.type(name) ~= \"string\" then\
-            name, opt1, opt2 = \"default\", name, opt1\
-        end\
-        local f = table[name or \"nil\"]\
-        if not f then base.error(\"unknown key (\".. base.tostring(name) ..\")\", 3)\
-        else return f(opt1, opt2) end\
-    end\
-end\
-\
------------------------------------------------------------------------------\
--- Socket sources and sinks, conforming to LTN12\
------------------------------------------------------------------------------\
--- create namespaces inside LuaSocket namespace\
-local sourcet, sinkt = {}, {}\
-_M.sourcet = sourcet\
-_M.sinkt = sinkt\
-\
-_M.BLOCKSIZE = 2048\
-\
-sinkt[\"close-when-done\"] = function(sock)\
-    return base.setmetatable({\
-        getfd = function() return sock:getfd() end,\
-        dirty = function() return sock:dirty() end\
-    }, {\
-        __call = function(self, chunk, err)\
-            if not chunk then\
-                sock:close()\
-                return 1\
-            else return sock:send(chunk) end\
-        end\
-    })\
-end\
-\
-sinkt[\"keep-open\"] = function(sock)\
-    return base.setmetatable({\
-        getfd = function() return sock:getfd() end,\
-        dirty = function() return sock:dirty() end\
-    }, {\
-        __call = function(self, chunk, err)\
-            if chunk then return sock:send(chunk)\
-            else return 1 end\
-        end\
-    })\
-end\
-\
-sinkt[\"default\"] = sinkt[\"keep-open\"]\
-\
-_M.sink = _M.choose(sinkt)\
-\
-sourcet[\"by-length\"] = function(sock, length)\
-    return base.setmetatable({\
-        getfd = function() return sock:getfd() end,\
-        dirty = function() return sock:dirty() end\
-    }, {\
-        __call = function()\
-            if length <= 0 then return nil end\
-            local size = math.min(socket.BLOCKSIZE, length)\
-            local chunk, err = sock:receive(size)\
-            if err then return nil, err end\
-            length = length - string.len(chunk)\
-            return chunk\
-        end\
-    })\
-end\
-\
-sourcet[\"until-closed\"] = function(sock)\
-    local done\
-    return base.setmetatable({\
-        getfd = function() return sock:getfd() end,\
-        dirty = function() return sock:dirty() end\
-    }, {\
-        __call = function()\
-            if done then return nil end\
-            local chunk, err, partial = sock:receive(socket.BLOCKSIZE)\
-            if not err then return chunk\
-            elseif err == \"closed\" then\
-                sock:close()\
-                done = 1\
-                return partial\
-            else return nil, err end\
-        end\
-    })\
-end\
-\
-\
-sourcet[\"default\"] = sourcet[\"until-closed\"]\
-\
-_M.source = _M.choose(sourcet)\
-\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- LuaSocket helper module\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module and import dependencies\n\
+-----------------------------------------------------------------------------\n\
+local base = _G\n\
+local string = require(\"string\")\n\
+local math = require(\"math\")\n\
+local socket = require(\"socket.core\")\n\
+\n\
+local _M = socket\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Exported auxiliar functions\n\
+-----------------------------------------------------------------------------\n\
+function _M.connect4(address, port, laddress, lport)\n\
+    return socket.connect(address, port, laddress, lport, \"inet\")\n\
+end\n\
+\n\
+function _M.connect6(address, port, laddress, lport)\n\
+    return socket.connect(address, port, laddress, lport, \"inet6\")\n\
+end\n\
+\n\
+function _M.bind(host, port, backlog)\n\
+    if host == \"*\" then host = \"0.0.0.0\" end\n\
+    local addrinfo, err = socket.dns.getaddrinfo(host);\n\
+    if not addrinfo then return nil, err end\n\
+    local sock, res\n\
+    err = \"no info on address\"\n\
+    for i, alt in base.ipairs(addrinfo) do\n\
+        if alt.family == \"inet\" then\n\
+            sock, err = socket.tcp4()\n\
+        else\n\
+            sock, err = socket.tcp6()\n\
+        end\n\
+        if not sock then return nil, err end\n\
+        sock:setoption(\"reuseaddr\", true)\n\
+        res, err = sock:bind(alt.addr, port)\n\
+        if not res then\n\
+            sock:close()\n\
+        else\n\
+            res, err = sock:listen(backlog)\n\
+            if not res then\n\
+                sock:close()\n\
+            else\n\
+                return sock\n\
+            end\n\
+        end\n\
+    end\n\
+    return nil, err\n\
+end\n\
+\n\
+_M.try = _M.newtry()\n\
+\n\
+function _M.choose(table)\n\
+    return function(name, opt1, opt2)\n\
+        if base.type(name) ~= \"string\" then\n\
+            name, opt1, opt2 = \"default\", name, opt1\n\
+        end\n\
+        local f = table[name or \"nil\"]\n\
+        if not f then base.error(\"unknown key (\".. base.tostring(name) ..\")\", 3)\n\
+        else return f(opt1, opt2) end\n\
+    end\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Socket sources and sinks, conforming to LTN12\n\
+-----------------------------------------------------------------------------\n\
+-- create namespaces inside LuaSocket namespace\n\
+local sourcet, sinkt = {}, {}\n\
+_M.sourcet = sourcet\n\
+_M.sinkt = sinkt\n\
+\n\
+_M.BLOCKSIZE = 2048\n\
+\n\
+sinkt[\"close-when-done\"] = function(sock)\n\
+    return base.setmetatable({\n\
+        getfd = function() return sock:getfd() end,\n\
+        dirty = function() return sock:dirty() end\n\
+    }, {\n\
+        __call = function(self, chunk, err)\n\
+            if not chunk then\n\
+                sock:close()\n\
+                return 1\n\
+            else return sock:send(chunk) end\n\
+        end\n\
+    })\n\
+end\n\
+\n\
+sinkt[\"keep-open\"] = function(sock)\n\
+    return base.setmetatable({\n\
+        getfd = function() return sock:getfd() end,\n\
+        dirty = function() return sock:dirty() end\n\
+    }, {\n\
+        __call = function(self, chunk, err)\n\
+            if chunk then return sock:send(chunk)\n\
+            else return 1 end\n\
+        end\n\
+    })\n\
+end\n\
+\n\
+sinkt[\"default\"] = sinkt[\"keep-open\"]\n\
+\n\
+_M.sink = _M.choose(sinkt)\n\
+\n\
+sourcet[\"by-length\"] = function(sock, length)\n\
+    return base.setmetatable({\n\
+        getfd = function() return sock:getfd() end,\n\
+        dirty = function() return sock:dirty() end\n\
+    }, {\n\
+        __call = function()\n\
+            if length <= 0 then return nil end\n\
+            local size = math.min(socket.BLOCKSIZE, length)\n\
+            local chunk, err = sock:receive(size)\n\
+            if err then return nil, err end\n\
+            length = length - string.len(chunk)\n\
+            return chunk\n\
+        end\n\
+    })\n\
+end\n\
+\n\
+sourcet[\"until-closed\"] = function(sock)\n\
+    local done\n\
+    return base.setmetatable({\n\
+        getfd = function() return sock:getfd() end,\n\
+        dirty = function() return sock:dirty() end\n\
+    }, {\n\
+        __call = function()\n\
+            if done then return nil end\n\
+            local chunk, err, partial = sock:receive(socket.BLOCKSIZE)\n\
+            if not err then return chunk\n\
+            elseif err == \"closed\" then\n\
+                sock:close()\n\
+                done = 1\n\
+                return partial\n\
+            else return nil, err end\n\
+        end\n\
+    })\n\
+end\n\
+\n\
+\n\
+sourcet[\"default\"] = sourcet[\"until-closed\"]\n\
+\n\
+_M.source = _M.choose(sourcet)\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_socket (lua_State *L) {
-  return luaL_loadbuffer(L,lau_socket,sizeof(lau_socket),"socket"); }
+  return lau_loadlua(L,lau_socket,sizeof(lau_socket),"socket"); }
 
 /* luasocket-3.0.0/src/tp.lua */
 static const char lau_tp[] = "\
------------------------------------------------------------------------------\
--- Unified SMTP/FTP subsystem\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module and import dependencies\
------------------------------------------------------------------------------\
-local base = _G\
-local string = require(\"string\")\
-local socket = require(\"socket\")\
-local ltn12 = require(\"ltn12\")\
-\
-socket.tp = {}\
-local _M = socket.tp\
-\
------------------------------------------------------------------------------\
--- Program constants\
------------------------------------------------------------------------------\
-_M.TIMEOUT = 60\
-\
------------------------------------------------------------------------------\
--- Implementation\
------------------------------------------------------------------------------\
--- gets server reply (works for SMTP and FTP)\
-local function get_reply(c)\
-    local code, current, sep\
-    local line, err = c:receive()\
-    local reply = line\
-    if err then return nil, err end\
-    code, sep = socket.skip(2, string.find(line, \"^(%d%d%d)(.?)\"))\
-    if not code then return nil, \"invalid server reply\" end\
-    if sep == \"-\" then -- reply is multiline\
-        repeat\
-            line, err = c:receive()\
-            if err then return nil, err end\
-            current, sep = socket.skip(2, string.find(line, \"^(%d%d%d)(.?)\"))\
-            reply = reply .. \"\\n\" .. line\
-        -- reply ends with same code\
-        until code == current and sep == \" \"\
-    end\
-    return code, reply\
-end\
-\
--- metatable for sock object\
-local metat = { __index = {} }\
-\
-function metat.__index:getpeername()\
-    return self.c:getpeername()\
-end\
-\
-function metat.__index:getsockname()\
-    return self.c:getpeername()\
-end\
-\
-function metat.__index:check(ok)\
-    local code, reply = get_reply(self.c)\
-    if not code then return nil, reply end\
-    if base.type(ok) ~= \"function\" then\
-        if base.type(ok) == \"table\" then\
-            for i, v in base.ipairs(ok) do\
-                if string.find(code, v) then\
-                    return base.tonumber(code), reply\
-                end\
-            end\
-            return nil, reply\
-        else\
-            if string.find(code, ok) then return base.tonumber(code), reply\
-            else return nil, reply end\
-        end\
-    else return ok(base.tonumber(code), reply) end\
-end\
-\
-function metat.__index:command(cmd, arg)\
-    cmd = string.upper(cmd)\
-    if arg then\
-        return self.c:send(cmd .. \" \" .. arg.. \"\\r\\n\")\
-    else\
-        return self.c:send(cmd .. \"\\r\\n\")\
-    end\
-end\
-\
-function metat.__index:sink(snk, pat)\
-    local chunk, err = self.c:receive(pat)\
-    return snk(chunk, err)\
-end\
-\
-function metat.__index:send(data)\
-    return self.c:send(data)\
-end\
-\
-function metat.__index:receive(pat)\
-    return self.c:receive(pat)\
-end\
-\
-function metat.__index:getfd()\
-    return self.c:getfd()\
-end\
-\
-function metat.__index:dirty()\
-    return self.c:dirty()\
-end\
-\
-function metat.__index:getcontrol()\
-    return self.c\
-end\
-\
-function metat.__index:source(source, step)\
-    local sink = socket.sink(\"keep-open\", self.c)\
-    local ret, err = ltn12.pump.all(source, sink, step or ltn12.pump.step)\
-    return ret, err\
-end\
-\
--- closes the underlying c\
-function metat.__index:close()\
-    self.c:close()\
-    return 1\
-end\
-\
--- connect with server and return c object\
-function _M.connect(host, port, timeout, create)\
-    local c, e = (create or socket.tcp)()\
-    if not c then return nil, e end\
-    c:settimeout(timeout or _M.TIMEOUT)\
-    local r, e = c:connect(host, port)\
-    if not r then\
-        c:close()\
-        return nil, e\
-    end\
-    return base.setmetatable({c = c}, metat)\
-end\
-\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- Unified SMTP/FTP subsystem\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module and import dependencies\n\
+-----------------------------------------------------------------------------\n\
+local base = _G\n\
+local string = require(\"string\")\n\
+local socket = require(\"socket\")\n\
+local ltn12 = require(\"ltn12\")\n\
+\n\
+socket.tp = {}\n\
+local _M = socket.tp\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Program constants\n\
+-----------------------------------------------------------------------------\n\
+_M.TIMEOUT = 60\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Implementation\n\
+-----------------------------------------------------------------------------\n\
+-- gets server reply (works for SMTP and FTP)\n\
+local function get_reply(c)\n\
+    local code, current, sep\n\
+    local line, err = c:receive()\n\
+    local reply = line\n\
+    if err then return nil, err end\n\
+    code, sep = socket.skip(2, string.find(line, \"^(%d%d%d)(.?)\"))\n\
+    if not code then return nil, \"invalid server reply\" end\n\
+    if sep == \"-\" then -- reply is multiline\n\
+        repeat\n\
+            line, err = c:receive()\n\
+            if err then return nil, err end\n\
+            current, sep = socket.skip(2, string.find(line, \"^(%d%d%d)(.?)\"))\n\
+            reply = reply .. \"\\n\" .. line\n\
+        -- reply ends with same code\n\
+        until code == current and sep == \" \"\n\
+    end\n\
+    return code, reply\n\
+end\n\
+\n\
+-- metatable for sock object\n\
+local metat = { __index = {} }\n\
+\n\
+function metat.__index:getpeername()\n\
+    return self.c:getpeername()\n\
+end\n\
+\n\
+function metat.__index:getsockname()\n\
+    return self.c:getpeername()\n\
+end\n\
+\n\
+function metat.__index:check(ok)\n\
+    local code, reply = get_reply(self.c)\n\
+    if not code then return nil, reply end\n\
+    if base.type(ok) ~= \"function\" then\n\
+        if base.type(ok) == \"table\" then\n\
+            for i, v in base.ipairs(ok) do\n\
+                if string.find(code, v) then\n\
+                    return base.tonumber(code), reply\n\
+                end\n\
+            end\n\
+            return nil, reply\n\
+        else\n\
+            if string.find(code, ok) then return base.tonumber(code), reply\n\
+            else return nil, reply end\n\
+        end\n\
+    else return ok(base.tonumber(code), reply) end\n\
+end\n\
+\n\
+function metat.__index:command(cmd, arg)\n\
+    cmd = string.upper(cmd)\n\
+    if arg then\n\
+        return self.c:send(cmd .. \" \" .. arg.. \"\\r\\n\")\n\
+    else\n\
+        return self.c:send(cmd .. \"\\r\\n\")\n\
+    end\n\
+end\n\
+\n\
+function metat.__index:sink(snk, pat)\n\
+    local chunk, err = self.c:receive(pat)\n\
+    return snk(chunk, err)\n\
+end\n\
+\n\
+function metat.__index:send(data)\n\
+    return self.c:send(data)\n\
+end\n\
+\n\
+function metat.__index:receive(pat)\n\
+    return self.c:receive(pat)\n\
+end\n\
+\n\
+function metat.__index:getfd()\n\
+    return self.c:getfd()\n\
+end\n\
+\n\
+function metat.__index:dirty()\n\
+    return self.c:dirty()\n\
+end\n\
+\n\
+function metat.__index:getcontrol()\n\
+    return self.c\n\
+end\n\
+\n\
+function metat.__index:source(source, step)\n\
+    local sink = socket.sink(\"keep-open\", self.c)\n\
+    local ret, err = ltn12.pump.all(source, sink, step or ltn12.pump.step)\n\
+    return ret, err\n\
+end\n\
+\n\
+-- closes the underlying c\n\
+function metat.__index:close()\n\
+    self.c:close()\n\
+    return 1\n\
+end\n\
+\n\
+-- connect with server and return c object\n\
+function _M.connect(host, port, timeout, create)\n\
+    local c, e = (create or socket.tcp)()\n\
+    if not c then return nil, e end\n\
+    c:settimeout(timeout or _M.TIMEOUT)\n\
+    local r, e = c:connect(host, port)\n\
+    if not r then\n\
+        c:close()\n\
+        return nil, e\n\
+    end\n\
+    return base.setmetatable({c = c}, metat)\n\
+end\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_tp (lua_State *L) {
-  return luaL_loadbuffer(L,lau_tp,sizeof(lau_tp),"tp"); }
+  return lau_loadlua(L,lau_tp,sizeof(lau_tp),"socket.tp"); }
 
 /* luasocket-3.0.0/src/url.lua */
 static const char lau_url[] = "\
------------------------------------------------------------------------------\
--- URI parsing, composition and relative URL resolution\
--- LuaSocket toolkit.\
--- Author: Diego Nehab\
------------------------------------------------------------------------------\
-\
------------------------------------------------------------------------------\
--- Declare module\
------------------------------------------------------------------------------\
-local string = require(\"string\")\
-local base = _G\
-local table = require(\"table\")\
-local socket = require(\"socket\")\
-\
-socket.url = {}\
-local _M = socket.url\
-\
------------------------------------------------------------------------------\
--- Module version\
------------------------------------------------------------------------------\
-_M._VERSION = \"URL 1.0.3\"\
-\
------------------------------------------------------------------------------\
--- Encodes a string into its escaped hexadecimal representation\
--- Input\
---   s: binary string to be encoded\
--- Returns\
---   escaped representation of string binary\
------------------------------------------------------------------------------\
-function _M.escape(s)\
-    return (string.gsub(s, \"([^A-Za-z0-9_])\", function(c)\
-        return string.format(\"%%%02x\", string.byte(c))\
-    end))\
-end\
-\
------------------------------------------------------------------------------\
--- Protects a path segment, to prevent it from interfering with the\
--- url parsing.\
--- Input\
---   s: binary string to be encoded\
--- Returns\
---   escaped representation of string binary\
------------------------------------------------------------------------------\
-local function make_set(t)\
-    local s = {}\
-    for i,v in base.ipairs(t) do\
-        s[t[i]] = 1\
-    end\
-    return s\
-end\
-\
--- these are allowed within a path segment, along with alphanum\
--- other characters must be escaped\
-local segment_set = make_set {\
-    \"-\", \"_\", \".\", \"!\", \"~\", \"*\", \"'\", \"(\",\
-    \")\", \":\", \"@\", \"&\", \"=\", \"+\", \"$\", \",\",\
-}\
-\
-local function protect_segment(s)\
-    return string.gsub(s, \"([^A-Za-z0-9_])\", function (c)\
-        if segment_set[c] then return c\
-        else return string.format(\"%%%02X\", string.byte(c)) end\
-    end)\
-end\
-\
------------------------------------------------------------------------------\
--- Unencodes a escaped hexadecimal string into its binary representation\
--- Input\
---   s: escaped hexadecimal string to be unencoded\
--- Returns\
---   unescaped binary representation of escaped hexadecimal  binary\
------------------------------------------------------------------------------\
-function _M.unescape(s)\
-    return (string.gsub(s, \"%%(%x%x)\", function(hex)\
-        return string.char(base.tonumber(hex, 16))\
-    end))\
-end\
-\
------------------------------------------------------------------------------\
--- Removes '..' and '.' components appropriately from a path.\
--- Input\
---   path\
--- Returns\
---   dot-normalized path\
-local function remove_dot_components(path)\
-    local marker = string.char(1)\
-    repeat\
-        local was = path\
-        path = path:gsub('//', '/'..marker..'/', 1)\
-    until path == was\
-    repeat\
-        local was = path\
-        path = path:gsub('/%./', '/', 1)\
-    until path == was\
-    repeat\
-        local was = path\
-        path = path:gsub('[^/]+/%.%./([^/]+)', '%1', 1)\
-    until path == was\
-    path = path:gsub('[^/]+/%.%./*$', '')\
-    path = path:gsub('/%.%.$', '/')\
-    path = path:gsub('/%.$', '/')\
-    path = path:gsub('^/%.%./', '/')\
-    path = path:gsub(marker, '')\
-    return path\
-end\
-\
------------------------------------------------------------------------------\
--- Builds a path from a base path and a relative path\
--- Input\
---   base_path\
---   relative_path\
--- Returns\
---   corresponding absolute path\
------------------------------------------------------------------------------\
-local function absolute_path(base_path, relative_path)\
-    if string.sub(relative_path, 1, 1) == \"/\" then\
-      return remove_dot_components(relative_path) end\
-    base_path = base_path:gsub(\"[^/]*$\", \"\")\
-    if not base_path:find'/$' then base_path = base_path .. '/' end\
-    local path = base_path .. relative_path\
-    path = remove_dot_components(path)\
-    return path\
-end\
-\
------------------------------------------------------------------------------\
--- Parses a url and returns a table with all its parts according to RFC 2396\
--- The following grammar describes the names given to the URL parts\
--- <url> ::= <scheme>://<authority>/<path>;<params>?<query>#<fragment>\
--- <authority> ::= <userinfo>@<host>:<port>\
--- <userinfo> ::= <user>[:<password>]\
--- <path> :: = {<segment>/}<segment>\
--- Input\
---   url: uniform resource locator of request\
---   default: table with default values for each field\
--- Returns\
---   table with the following fields, where RFC naming conventions have\
---   been preserved:\
---     scheme, authority, userinfo, user, password, host, port,\
---     path, params, query, fragment\
--- Obs:\
---   the leading '/' in {/<path>} is considered part of <path>\
------------------------------------------------------------------------------\
-function _M.parse(url, default)\
-    -- initialize default parameters\
-    local parsed = {}\
-    for i,v in base.pairs(default or parsed) do parsed[i] = v end\
-    -- empty url is parsed to nil\
-    if not url or url == \"\" then return nil, \"invalid url\" end\
-    -- remove whitespace\
-    -- url = string.gsub(url, \"%s\", \"\")\
-    -- get scheme\
-    url = string.gsub(url, \"^([%w][%w%+%-%.]*)%:\",\
-        function(s) parsed.scheme = s; return \"\" end)\
-    -- get authority\
-    url = string.gsub(url, \"^//([^/]*)\", function(n)\
-        parsed.authority = n\
-        return \"\"\
-    end)\
-    -- get fragment\
-    url = string.gsub(url, \"#(.*)$\", function(f)\
-        parsed.fragment = f\
-        return \"\"\
-    end)\
-    -- get query string\
-    url = string.gsub(url, \"%?(.*)\", function(q)\
-        parsed.query = q\
-        return \"\"\
-    end)\
-    -- get params\
-    url = string.gsub(url, \"%;(.*)\", function(p)\
-        parsed.params = p\
-        return \"\"\
-    end)\
-    -- path is whatever was left\
-    if url ~= \"\" then parsed.path = url end\
-    local authority = parsed.authority\
-    if not authority then return parsed end\
-    authority = string.gsub(authority,\"^([^@]*)@\",\
-        function(u) parsed.userinfo = u; return \"\" end)\
-    authority = string.gsub(authority, \":([^:%]]*)$\",\
-        function(p) parsed.port = p; return \"\" end)\
-    if authority ~= \"\" then\
-        -- IPv6?\
-        parsed.host = string.match(authority, \"^%[(.+)%]$\") or authority\
-    end\
-    local userinfo = parsed.userinfo\
-    if not userinfo then return parsed end\
-    userinfo = string.gsub(userinfo, \":([^:]*)$\",\
-        function(p) parsed.password = p; return \"\" end)\
-    parsed.user = userinfo\
-    return parsed\
-end\
-\
------------------------------------------------------------------------------\
--- Rebuilds a parsed URL from its components.\
--- Components are protected if any reserved or unallowed characters are found\
--- Input\
---   parsed: parsed URL, as returned by parse\
--- Returns\
---   a stringing with the corresponding URL\
------------------------------------------------------------------------------\
-function _M.build(parsed)\
-    --local ppath = _M.parse_path(parsed.path or \"\")\
-    --local url = _M.build_path(ppath)\
-    local url = parsed.path or \"\"\
-    if parsed.params then url = url .. \";\" .. parsed.params end\
-    if parsed.query then url = url .. \"?\" .. parsed.query end\
-    local authority = parsed.authority\
-    if parsed.host then\
-        authority = parsed.host\
-        if string.find(authority, \":\") then -- IPv6?\
-            authority = \"[\" .. authority .. \"]\"\
-        end\
-        if parsed.port then authority = authority .. \":\" .. base.tostring(parsed.port) end\
-        local userinfo = parsed.userinfo\
-        if parsed.user then\
-            userinfo = parsed.user\
-            if parsed.password then\
-                userinfo = userinfo .. \":\" .. parsed.password\
-            end\
-        end\
-        if userinfo then authority = userinfo .. \"@\" .. authority end\
-    end\
-    if authority then url = \"//\" .. authority .. url end\
-    if parsed.scheme then url = parsed.scheme .. \":\" .. url end\
-    if parsed.fragment then url = url .. \"#\" .. parsed.fragment end\
-    -- url = string.gsub(url, \"%s\", \"\")\
-    return url\
-end\
-\
------------------------------------------------------------------------------\
--- Builds a absolute URL from a base and a relative URL according to RFC 2396\
--- Input\
---   base_url\
---   relative_url\
--- Returns\
---   corresponding absolute url\
------------------------------------------------------------------------------\
-function _M.absolute(base_url, relative_url)\
-    local base_parsed\
-    if base.type(base_url) == \"table\" then\
-        base_parsed = base_url\
-        base_url = _M.build(base_parsed)\
-    else\
-        base_parsed = _M.parse(base_url)\
-    end\
-    local result\
-    local relative_parsed = _M.parse(relative_url)\
-    if not base_parsed then\
-        result = relative_url\
-    elseif not relative_parsed then\
-        result = base_url\
-    elseif relative_parsed.scheme then\
-        result = relative_url\
-    else\
-        relative_parsed.scheme = base_parsed.scheme\
-        if not relative_parsed.authority then\
-            relative_parsed.authority = base_parsed.authority\
-            if not relative_parsed.path then\
-                relative_parsed.path = base_parsed.path\
-                if not relative_parsed.params then\
-                    relative_parsed.params = base_parsed.params\
-                    if not relative_parsed.query then\
-                        relative_parsed.query = base_parsed.query\
-                    end\
-                end\
-            else\
-                relative_parsed.path = absolute_path(base_parsed.path or \"\",\
-                    relative_parsed.path)\
-            end\
-        end\
-        result = _M.build(relative_parsed)\
-    end\
-    return remove_dot_components(result)\
-end\
-\
------------------------------------------------------------------------------\
--- Breaks a path into its segments, unescaping the segments\
--- Input\
---   path\
--- Returns\
---   segment: a table with one entry per segment\
------------------------------------------------------------------------------\
-function _M.parse_path(path)\
-    local parsed = {}\
-    path = path or \"\"\
-    --path = string.gsub(path, \"%s\", \"\")\
-    string.gsub(path, \"([^/]+)\", function (s) table.insert(parsed, s) end)\
-    for i = 1, #parsed do\
-        parsed[i] = _M.unescape(parsed[i])\
-    end\
-    if string.sub(path, 1, 1) == \"/\" then parsed.is_absolute = 1 end\
-    if string.sub(path, -1, -1) == \"/\" then parsed.is_directory = 1 end\
-    return parsed\
-end\
-\
------------------------------------------------------------------------------\
--- Builds a path component from its segments, escaping protected characters.\
--- Input\
---   parsed: path segments\
---   unsafe: if true, segments are not protected before path is built\
--- Returns\
---   path: corresponding path stringing\
------------------------------------------------------------------------------\
-function _M.build_path(parsed, unsafe)\
-    local path = \"\"\
-    local n = #parsed\
-    if unsafe then\
-        for i = 1, n-1 do\
-            path = path .. parsed[i]\
-            path = path .. \"/\"\
-        end\
-        if n > 0 then\
-            path = path .. parsed[n]\
-            if parsed.is_directory then path = path .. \"/\" end\
-        end\
-    else\
-        for i = 1, n-1 do\
-            path = path .. protect_segment(parsed[i])\
-            path = path .. \"/\"\
-        end\
-        if n > 0 then\
-            path = path .. protect_segment(parsed[n])\
-            if parsed.is_directory then path = path .. \"/\" end\
-        end\
-    end\
-    if parsed.is_absolute then path = \"/\" .. path end\
-    return path\
-end\
-\
-return _M\
-\
+-----------------------------------------------------------------------------\n\
+-- URI parsing, composition and relative URL resolution\n\
+-- LuaSocket toolkit.\n\
+-- Author: Diego Nehab\n\
+-----------------------------------------------------------------------------\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Declare module\n\
+-----------------------------------------------------------------------------\n\
+local string = require(\"string\")\n\
+local base = _G\n\
+local table = require(\"table\")\n\
+local socket = require(\"socket\")\n\
+\n\
+socket.url = {}\n\
+local _M = socket.url\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Module version\n\
+-----------------------------------------------------------------------------\n\
+_M._VERSION = \"URL 1.0.3\"\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Encodes a string into its escaped hexadecimal representation\n\
+-- Input\n\
+--   s: binary string to be encoded\n\
+-- Returns\n\
+--   escaped representation of string binary\n\
+-----------------------------------------------------------------------------\n\
+function _M.escape(s)\n\
+    return (string.gsub(s, \"([^A-Za-z0-9_])\", function(c)\n\
+        return string.format(\"%%%02x\", string.byte(c))\n\
+    end))\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Protects a path segment, to prevent it from interfering with the\n\
+-- url parsing.\n\
+-- Input\n\
+--   s: binary string to be encoded\n\
+-- Returns\n\
+--   escaped representation of string binary\n\
+-----------------------------------------------------------------------------\n\
+local function make_set(t)\n\
+    local s = {}\n\
+    for i,v in base.ipairs(t) do\n\
+        s[t[i]] = 1\n\
+    end\n\
+    return s\n\
+end\n\
+\n\
+-- these are allowed within a path segment, along with alphanum\n\
+-- other characters must be escaped\n\
+local segment_set = make_set {\n\
+    \"-\", \"_\", \".\", \"!\", \"~\", \"*\", \"'\", \"(\",\n\
+    \")\", \":\", \"@\", \"&\", \"=\", \"+\", \"$\", \",\",\n\
+}\n\
+\n\
+local function protect_segment(s)\n\
+    return string.gsub(s, \"([^A-Za-z0-9_])\", function (c)\n\
+        if segment_set[c] then return c\n\
+        else return string.format(\"%%%02X\", string.byte(c)) end\n\
+    end)\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Unencodes a escaped hexadecimal string into its binary representation\n\
+-- Input\n\
+--   s: escaped hexadecimal string to be unencoded\n\
+-- Returns\n\
+--   unescaped binary representation of escaped hexadecimal  binary\n\
+-----------------------------------------------------------------------------\n\
+function _M.unescape(s)\n\
+    return (string.gsub(s, \"%%(%x%x)\", function(hex)\n\
+        return string.char(base.tonumber(hex, 16))\n\
+    end))\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Removes '..' and '.' components appropriately from a path.\n\
+-- Input\n\
+--   path\n\
+-- Returns\n\
+--   dot-normalized path\n\
+local function remove_dot_components(path)\n\
+    local marker = string.char(1)\n\
+    repeat\n\
+        local was = path\n\
+        path = path:gsub('//', '/'..marker..'/', 1)\n\
+    until path == was\n\
+    repeat\n\
+        local was = path\n\
+        path = path:gsub('/%./', '/', 1)\n\
+    until path == was\n\
+    repeat\n\
+        local was = path\n\
+        path = path:gsub('[^/]+/%.%./([^/]+)', '%1', 1)\n\
+    until path == was\n\
+    path = path:gsub('[^/]+/%.%./*$', '')\n\
+    path = path:gsub('/%.%.$', '/')\n\
+    path = path:gsub('/%.$', '/')\n\
+    path = path:gsub('^/%.%./', '/')\n\
+    path = path:gsub(marker, '')\n\
+    return path\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Builds a path from a base path and a relative path\n\
+-- Input\n\
+--   base_path\n\
+--   relative_path\n\
+-- Returns\n\
+--   corresponding absolute path\n\
+-----------------------------------------------------------------------------\n\
+local function absolute_path(base_path, relative_path)\n\
+    if string.sub(relative_path, 1, 1) == \"/\" then\n\
+      return remove_dot_components(relative_path) end\n\
+    base_path = base_path:gsub(\"[^/]*$\", \"\")\n\
+    if not base_path:find'/$' then base_path = base_path .. '/' end\n\
+    local path = base_path .. relative_path\n\
+    path = remove_dot_components(path)\n\
+    return path\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Parses a url and returns a table with all its parts according to RFC 2396\n\
+-- The following grammar describes the names given to the URL parts\n\
+-- <url> ::= <scheme>://<authority>/<path>;<params>?<query>#<fragment>\n\
+-- <authority> ::= <userinfo>@<host>:<port>\n\
+-- <userinfo> ::= <user>[:<password>]\n\
+-- <path> :: = {<segment>/}<segment>\n\
+-- Input\n\
+--   url: uniform resource locator of request\n\
+--   default: table with default values for each field\n\
+-- Returns\n\
+--   table with the following fields, where RFC naming conventions have\n\
+--   been preserved:\n\
+--     scheme, authority, userinfo, user, password, host, port,\n\
+--     path, params, query, fragment\n\
+-- Obs:\n\
+--   the leading '/' in {/<path>} is considered part of <path>\n\
+-----------------------------------------------------------------------------\n\
+function _M.parse(url, default)\n\
+    -- initialize default parameters\n\
+    local parsed = {}\n\
+    for i,v in base.pairs(default or parsed) do parsed[i] = v end\n\
+    -- empty url is parsed to nil\n\
+    if not url or url == \"\" then return nil, \"invalid url\" end\n\
+    -- remove whitespace\n\
+    -- url = string.gsub(url, \"%s\", \"\")\n\
+    -- get scheme\n\
+    url = string.gsub(url, \"^([%w][%w%+%-%.]*)%:\",\n\
+        function(s) parsed.scheme = s; return \"\" end)\n\
+    -- get authority\n\
+    url = string.gsub(url, \"^//([^/]*)\", function(n)\n\
+        parsed.authority = n\n\
+        return \"\"\n\
+    end)\n\
+    -- get fragment\n\
+    url = string.gsub(url, \"#(.*)$\", function(f)\n\
+        parsed.fragment = f\n\
+        return \"\"\n\
+    end)\n\
+    -- get query string\n\
+    url = string.gsub(url, \"%?(.*)\", function(q)\n\
+        parsed.query = q\n\
+        return \"\"\n\
+    end)\n\
+    -- get params\n\
+    url = string.gsub(url, \"%;(.*)\", function(p)\n\
+        parsed.params = p\n\
+        return \"\"\n\
+    end)\n\
+    -- path is whatever was left\n\
+    if url ~= \"\" then parsed.path = url end\n\
+    local authority = parsed.authority\n\
+    if not authority then return parsed end\n\
+    authority = string.gsub(authority,\"^([^@]*)@\",\n\
+        function(u) parsed.userinfo = u; return \"\" end)\n\
+    authority = string.gsub(authority, \":([^:%]]*)$\",\n\
+        function(p) parsed.port = p; return \"\" end)\n\
+    if authority ~= \"\" then\n\
+        -- IPv6?\n\
+        parsed.host = string.match(authority, \"^%[(.+)%]$\") or authority\n\
+    end\n\
+    local userinfo = parsed.userinfo\n\
+    if not userinfo then return parsed end\n\
+    userinfo = string.gsub(userinfo, \":([^:]*)$\",\n\
+        function(p) parsed.password = p; return \"\" end)\n\
+    parsed.user = userinfo\n\
+    return parsed\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Rebuilds a parsed URL from its components.\n\
+-- Components are protected if any reserved or unallowed characters are found\n\
+-- Input\n\
+--   parsed: parsed URL, as returned by parse\n\
+-- Returns\n\
+--   a stringing with the corresponding URL\n\
+-----------------------------------------------------------------------------\n\
+function _M.build(parsed)\n\
+    --local ppath = _M.parse_path(parsed.path or \"\")\n\
+    --local url = _M.build_path(ppath)\n\
+    local url = parsed.path or \"\"\n\
+    if parsed.params then url = url .. \";\" .. parsed.params end\n\
+    if parsed.query then url = url .. \"?\" .. parsed.query end\n\
+    local authority = parsed.authority\n\
+    if parsed.host then\n\
+        authority = parsed.host\n\
+        if string.find(authority, \":\") then -- IPv6?\n\
+            authority = \"[\" .. authority .. \"]\"\n\
+        end\n\
+        if parsed.port then authority = authority .. \":\" .. base.tostring(parsed.port) end\n\
+        local userinfo = parsed.userinfo\n\
+        if parsed.user then\n\
+            userinfo = parsed.user\n\
+            if parsed.password then\n\
+                userinfo = userinfo .. \":\" .. parsed.password\n\
+            end\n\
+        end\n\
+        if userinfo then authority = userinfo .. \"@\" .. authority end\n\
+    end\n\
+    if authority then url = \"//\" .. authority .. url end\n\
+    if parsed.scheme then url = parsed.scheme .. \":\" .. url end\n\
+    if parsed.fragment then url = url .. \"#\" .. parsed.fragment end\n\
+    -- url = string.gsub(url, \"%s\", \"\")\n\
+    return url\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Builds a absolute URL from a base and a relative URL according to RFC 2396\n\
+-- Input\n\
+--   base_url\n\
+--   relative_url\n\
+-- Returns\n\
+--   corresponding absolute url\n\
+-----------------------------------------------------------------------------\n\
+function _M.absolute(base_url, relative_url)\n\
+    local base_parsed\n\
+    if base.type(base_url) == \"table\" then\n\
+        base_parsed = base_url\n\
+        base_url = _M.build(base_parsed)\n\
+    else\n\
+        base_parsed = _M.parse(base_url)\n\
+    end\n\
+    local result\n\
+    local relative_parsed = _M.parse(relative_url)\n\
+    if not base_parsed then\n\
+        result = relative_url\n\
+    elseif not relative_parsed then\n\
+        result = base_url\n\
+    elseif relative_parsed.scheme then\n\
+        result = relative_url\n\
+    else\n\
+        relative_parsed.scheme = base_parsed.scheme\n\
+        if not relative_parsed.authority then\n\
+            relative_parsed.authority = base_parsed.authority\n\
+            if not relative_parsed.path then\n\
+                relative_parsed.path = base_parsed.path\n\
+                if not relative_parsed.params then\n\
+                    relative_parsed.params = base_parsed.params\n\
+                    if not relative_parsed.query then\n\
+                        relative_parsed.query = base_parsed.query\n\
+                    end\n\
+                end\n\
+            else\n\
+                relative_parsed.path = absolute_path(base_parsed.path or \"\",\n\
+                    relative_parsed.path)\n\
+            end\n\
+        end\n\
+        result = _M.build(relative_parsed)\n\
+    end\n\
+    return remove_dot_components(result)\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Breaks a path into its segments, unescaping the segments\n\
+-- Input\n\
+--   path\n\
+-- Returns\n\
+--   segment: a table with one entry per segment\n\
+-----------------------------------------------------------------------------\n\
+function _M.parse_path(path)\n\
+    local parsed = {}\n\
+    path = path or \"\"\n\
+    --path = string.gsub(path, \"%s\", \"\")\n\
+    string.gsub(path, \"([^/]+)\", function (s) table.insert(parsed, s) end)\n\
+    for i = 1, #parsed do\n\
+        parsed[i] = _M.unescape(parsed[i])\n\
+    end\n\
+    if string.sub(path, 1, 1) == \"/\" then parsed.is_absolute = 1 end\n\
+    if string.sub(path, -1, -1) == \"/\" then parsed.is_directory = 1 end\n\
+    return parsed\n\
+end\n\
+\n\
+-----------------------------------------------------------------------------\n\
+-- Builds a path component from its segments, escaping protected characters.\n\
+-- Input\n\
+--   parsed: path segments\n\
+--   unsafe: if true, segments are not protected before path is built\n\
+-- Returns\n\
+--   path: corresponding path stringing\n\
+-----------------------------------------------------------------------------\n\
+function _M.build_path(parsed, unsafe)\n\
+    local path = \"\"\n\
+    local n = #parsed\n\
+    if unsafe then\n\
+        for i = 1, n-1 do\n\
+            path = path .. parsed[i]\n\
+            path = path .. \"/\"\n\
+        end\n\
+        if n > 0 then\n\
+            path = path .. parsed[n]\n\
+            if parsed.is_directory then path = path .. \"/\" end\n\
+        end\n\
+    else\n\
+        for i = 1, n-1 do\n\
+            path = path .. protect_segment(parsed[i])\n\
+            path = path .. \"/\"\n\
+        end\n\
+        if n > 0 then\n\
+            path = path .. protect_segment(parsed[n])\n\
+            if parsed.is_directory then path = path .. \"/\" end\n\
+        end\n\
+    end\n\
+    if parsed.is_absolute then path = \"/\" .. path end\n\
+    return path\n\
+end\n\
+\n\
+return _M\n\
+\n\
 ";
 LUAMOD_API int luaopen_url (lua_State *L) {
-  return luaL_loadbuffer(L,lau_url,sizeof(lau_url),"url"); }
+  return lau_loadlua(L,lau_url,sizeof(lau_url),"socket.url"); }
 
-static struct luaL_Reg lau__strings[] = {
- {"ftp",luaopen_ftp},
- {"headers",luaopen_headers},
- {"http",luaopen_http},
+static struct luaL_Reg lau_luamodules[] = {
+ {"socket.ftp",luaopen_ftp},
+ {"socket.headers",luaopen_headers},
+ {"socket.http",luaopen_http},
  {"ltn12",luaopen_ltn12},
  {"mbox",luaopen_mbox},
  {"mime",luaopen_mime},
- {"smtp",luaopen_smtp},
+ {"socket.smtp",luaopen_smtp},
  {"socket",luaopen_socket},
- {"tp",luaopen_tp},
- {"url",luaopen_url},
+ {"socket.tp",luaopen_tp},
+ {"socket.url",luaopen_url},
  {NULL,NULL}};
