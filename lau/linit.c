@@ -67,6 +67,9 @@ static const luaL_Reg loadedlibs[] = {
 LUASOCKET_API int luaopen_socket_serial(lua_State *L);
 #endif
 
+/* Missing prototype */
+LUALIB_API int luaopen_zlib(lua_State *L);
+
 static const luaL_Reg linkedlibs[] = {
   {"lfs", luaopen_lfs},
   {"socket.core", luaopen_socket_core},
@@ -78,6 +81,7 @@ static const luaL_Reg linkedlibs[] = {
   {"socket.serial", luaopen_socket_serial},
 #endif
   {"socket.unix", luaopen_socket_unix},
+  {"zlib", luaopen_zlib},
   {NULL, NULL}
 };
 
